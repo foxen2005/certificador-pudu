@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getEvent } from "vinxi/http";
 import { getSiiBackendUrl } from "@/lib/sii-config";
 
 const corsHeaders = {
@@ -75,26 +74,15 @@ async function getGCPIdentityToken(sa: ServiceAccountKey, audience: string): Pro
 // Lee un secret desde CF Workers bindings (via H3 event context de Vinxi/TanStack Start)
 // o como fallback desde process.env / globalThis.
 function readSecret(key: string): string {
-  // 1. CF Workers binding via H3 event context (Vinxi adapter)
-  try {
-    const event = getEvent();
-    const cfEnv = (event.context as Record<string, unknown>)?.cloudflare as
-      | Record<string, Record<string, string>>
-      | undefined;
-    if (cfEnv?.env?.[key]) return cfEnv.env[key];
-  } catch {
-    // getEvent() falla fuera de un request context
-  }
-
-  // 2. globalThis.env (Wrangler / Miniflare dev)
+  // 1. globalThis.env (Wrangler / Miniflare dev)
   const g = globalThis as Record<string, unknown>;
   const cfEnv = g["env"] as Record<string, string> | undefined;
   if (cfEnv?.[key]) return cfEnv[key];
 
-  // 3. Binding directo en globalThis
+  // 2. Binding directo en globalThis
   if (typeof g[key] === "string" && g[key]) return g[key] as string;
 
-  // 4. process.env (Node / polyfill)
+  // 3. process.env (Node / polyfill)
   const procEnv = (g["process"] as { env?: Record<string, string> } | undefined)?.env;
   if (procEnv?.[key]) return procEnv[key];
 
