@@ -5,20 +5,26 @@ También acepta XMLs ya generados para re-procesar.
 import os
 import zipfile
 import io
+import re as _re
+import subprocess
+import tempfile
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from parser import parse_envio_dte, TIPO_NOMBRE, CEDIBLE_TIPOS
 from generator import generate_pdf
 from validator import validate_pdf
-from set_parser import parse_set_pruebas
+from set_parser import parse_set_pruebas, CasoSet, ItemSet
 from builders.envio_dte import CAF, build_dte_xml, build_envio_dte
 from libro_builder import build_libro_ventas, build_libro_compras
 from timestamped_output import get_timestamped_output_dir
 
-OUTPUT_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_BASE_DIR = os.path.join(_PROJECT_ROOT, "output")
+_FIRMA_RESP  = os.path.join(_PROJECT_ROOT, "verify", "firmar_respuesta_dte.js")
+_FIRMA_RECIB = os.path.join(_PROJECT_ROOT, "verify", "firmar_envio_recibos.js")
 
 app = FastAPI(title="SII Certificador", version="1.0.0")
 
@@ -404,3 +410,400 @@ async def solo_validar(file: UploadFile = File(...)):
             for c in val.checks
         ]
     }
+
+
+# ─── ETAPA 2 — Simulación ────────────────────────────────────────────────────
+
+@app.post("/etapa2")
+async def etapa2_simulacion(
+    datos:  UploadFile = File(..., description="DATOS.txt"),
+    pfx:    UploadFile = File(..., description="Certificado .pfx/.p12"),
+    caf_33: UploadFile = File(..., description="CAF Factura T33"),
+    caf_61: UploadFile = File(..., description="CAF Nota de Crédito T61"),
+    caf_56: UploadFile = File(..., description="CAF Nota de Débito T56"),
+    folio_33: int = Form(None, description="Folio T33 (opcional, usa el siguiente disponible)"),
+    folio_61: int = Form(None, description="Folio T61 (opcional)"),
+    folio_56: int = Form(None, description="Folio T56 (opcional)"),
+    producto: str = Form("Servicio tecnológico", description="Nombre del producto/servicio"),
+    precio:   int = Form(35000, description="Precio unitario (sin IVA)"),
+):
+    """
+    Etapa 2 — Genera EnvioDTE de Simulación con 3 DTEs:
+      T33 — Factura (2 unidades)
+      T61 — NC devolución parcial (1 unidad, ref T33)
+      T56 — ND anula NC (1 unidad, ref T61)
+    """
+    dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
+    dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
+    if len(dat_lines) < 5:
+        raise HTTPException(422, "DATOS.txt debe tener al menos 5 líneas")
+
+    emisor_data = {
+        "rut":         dat_lines[3],
+        "rut_envia":   dat_lines[1],
+        "razon_social":dat_lines[2],
+        "giro":        dat_lines[5] if len(dat_lines) > 5 else "ACTIVIDADES DE SERVICIOS",
+        "acteco":      dat_lines[6] if len(dat_lines) > 6 else "999999",
+        "dir_origen":  dat_lines[7] if len(dat_lines) > 7 else "",
+        "cmna_origen": dat_lines[8] if len(dat_lines) > 8 else "",
+        "nro_resol":   dat_lines[9] if len(dat_lines) > 9 else "0",
+        "fch_resol":   dat_lines[10] if len(dat_lines) > 10 else datetime.now().strftime("%Y-%m-%d"),
+    }
+    pfx_password = dat_lines[4]
+    pfx_bytes    = await pfx.read()
+
+    try:
+        caf33 = CAF(await caf_33.read())
+        caf61 = CAF(await caf_61.read())
+        caf56 = CAF(await caf_56.read())
+    except Exception as e:
+        raise HTTPException(422, f"Error leyendo CAF: {e}")
+
+    # Folios: usa el indicado o el siguiente disponible desde el mínimo del CAF
+    f33 = folio_33 or caf33.desde
+    f61 = folio_61 or caf61.desde
+    f56 = folio_56 or caf56.desde
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Construir casos sintéticos para Simulación
+    caso_t33 = CasoSet(numero="SIM-1", tipo_doc=33,
+                       items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+    caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
+                       items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                       referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
+    caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
+                       items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                       referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+
+    folios_ref = {"SIM-1": f33, "SIM-2": f61}
+    tipos_ref  = {"SIM-1": 33, "SIM-2": 61, "SIM-3": 56}
+
+    try:
+        dte33 = build_dte_xml(caso_t33, f33, emisor_data, RECEPTOR_PRUEBA, caf33, timestamp, folios_ref, tipos_ref)
+        dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
+        dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
+    except Exception as e:
+        raise HTTPException(500, f"Error generando DTEs simulación: {e}")
+
+    try:
+        envio_xml = build_envio_dte([dte33, dte61, dte56], emisor_data, pfx_bytes, pfx_password, timestamp)
+    except Exception as e:
+        raise HTTPException(500, f"Error firmando EnvioDTE simulación: {e}")
+
+    dtes_parsed = parse_envio_dte(envio_xml)
+    rut_clean   = emisor_data["rut"].replace("-", "")
+    out_dir     = get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="etapa2")
+    resultados  = []
+    zip_buf     = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"EnvioDTE_{rut_clean}.xml", envio_xml)
+        with open(os.path.join(out_dir, f"EnvioDTE_{rut_clean}.xml"), "wb") as fh:
+            fh.write(envio_xml if isinstance(envio_xml, bytes) else envio_xml.encode())
+
+        for dte in dtes_parsed:
+            for cedible in ([False, True] if dte.tipo in CEDIBLE_TIPOS else [False]):
+                suffix   = "_CEDIBLE" if cedible else ""
+                pdf_name = f"DTE_T{dte.tipo}F{dte.folio}{suffix}.pdf"
+                pdf_b    = generate_pdf(dte, cedible=cedible)
+                zf.writestr(pdf_name, pdf_b)
+                with open(os.path.join(out_dir, pdf_name), "wb") as fh:
+                    fh.write(pdf_b)
+                val = validate_pdf(pdf_b, pdf_name)
+                resultados.append({
+                    "folio": dte.folio, "tipo": dte.tipo,
+                    "tipo_nombre": TIPO_NOMBRE.get(dte.tipo, f"Tipo {dte.tipo}"),
+                    "cedible": cedible, "archivo": pdf_name,
+                    "validacion": {"aprobado": val.passed, "puntaje": val.score,
+                                   "checks": [{"nombre": c.name, "ok": c.passed, "detalle": c.detail} for c in val.checks]},
+                })
+
+    zip_buf.seek(0)
+    zip_b64   = __import__("base64").b64encode(zip_buf.getvalue()).decode()
+    aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
+    return JSONResponse({
+        "folios": {"T33": f33, "T61": f61, "T56": f56},
+        "documentos": 3, "pdfs_generados": len(resultados),
+        "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
+        "resultados": resultados, "zip_base64": zip_b64,
+    })
+
+
+# ─── ETAPA 3 — Intercambio ───────────────────────────────────────────────────
+
+@app.post("/etapa3")
+async def etapa3_intercambio(
+    set_intercambio: UploadFile = File(..., description="ENVIO_DTE_*.xml recibido del SII"),
+    pfx:             UploadFile = File(..., description="Certificado .pfx/.p12"),
+    datos:           UploadFile = File(..., description="DATOS.txt"),
+):
+    """
+    Etapa 3 — Genera los 3 XML de respuesta al SET de Intercambio del SII:
+      1_RecepcionDTE.xml   — acuse de recepción
+      2_EnvioRecibos.xml   — acuse de recibo de mercaderías
+      3_ResultadoDTE.xml   — resultado comercial (acepta los nuestros, rechaza los ajenos)
+    """
+    from lxml import etree as _etree
+
+    dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
+    dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
+    if len(dat_lines) < 5:
+        raise HTTPException(422, "DATOS.txt debe tener al menos 5 líneas")
+
+    dat = {
+        "rut":       dat_lines[3],
+        "rut_envia": dat_lines[1],
+        "nombre":    dat_lines[0],
+        "email":     "contacto@empresa.cl",
+        "_pfx_pass": dat_lines[4],
+    }
+    pfx_bytes   = await pfx.read()
+    set_xml_raw = await set_intercambio.read()
+    orig_fname  = set_intercambio.filename or "ENVIO_DTE.xml"
+
+    # Parsear el SET
+    NS_SII = "http://www.sii.cl/SiiDte"
+    NS_DS  = "http://www.w3.org/2000/09/xmldsig#"
+    try:
+        tree    = _etree.fromstring(set_xml_raw)
+        set_dte = tree.find(f"{{{NS_SII}}}SetDTE")
+        set_id  = set_dte.get("ID")
+
+        digest = None
+        for sig in tree.findall(f"{{{NS_DS}}}Signature"):
+            for ref in sig.findall(f".//{{{NS_DS}}}Reference"):
+                if ref.get("URI") == f"#{set_id}":
+                    dv = ref.find(f"{{{NS_DS}}}DigestValue")
+                    if dv is not None:
+                        digest = dv.text.strip()
+
+        dtes_set = []
+        for dte_el in set_dte.findall(f"{{{NS_SII}}}DTE"):
+            doc  = dte_el.find(f"{{{NS_SII}}}Documento")
+            enc  = doc.find(f"{{{NS_SII}}}Encabezado")
+            iddoc = enc.find(f"{{{NS_SII}}}IdDoc")
+            tots  = enc.find(f"{{{NS_SII}}}Totales")
+            rec   = enc.find(f"{{{NS_SII}}}Receptor")
+            dtes_set.append({
+                "tipo":       iddoc.findtext(f"{{{NS_SII}}}TipoDTE"),
+                "folio":      iddoc.findtext(f"{{{NS_SII}}}Folio"),
+                "fch_emis":   iddoc.findtext(f"{{{NS_SII}}}FchEmis"),
+                "rut_emisor": enc.find(f"{{{NS_SII}}}Emisor").findtext(f"{{{NS_SII}}}RUTEmisor"),
+                "rut_recep":  rec.findtext(f"{{{NS_SII}}}RUTRecep"),
+                "mnt_total":  tots.findtext(f"{{{NS_SII}}}MntTotal"),
+            })
+    except Exception as e:
+        raise HTTPException(422, f"Error al parsear SET de intercambio: {e}")
+
+    m = _re.search(r'ENVIO_DTE_(\d+)', orig_fname, _re.IGNORECASE)
+    nmbenvio    = f"ENVIO_DTE_{m.group(1)}.xml" if m else orig_fname
+    rut_emisor_set = dtes_set[0]["rut_emisor"]
+    ts          = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    def _build_recepcion():
+        R = _etree.Element("RespuestaDTE", xmlns=NS_SII,
+                           attrib={"{http://www.w3.org/2001/XMLSchema-instance}schemaLocation":
+                                   "http://www.sii.cl/SiiDte RespuestaEnvioDTE_v10.xsd", "version": "1.0"})
+        RES = _etree.SubElement(R, "Resultado", ID="LibreDTE_ResultadoEnvio")
+        CAR = _etree.SubElement(RES, "Caratula", version="1.0")
+        _etree.SubElement(CAR, "RutResponde").text  = dat["rut"]
+        _etree.SubElement(CAR, "RutRecibe").text    = rut_emisor_set
+        _etree.SubElement(CAR, "IdRespuesta").text  = "1"
+        _etree.SubElement(CAR, "NroDetalles").text  = "1"
+        _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
+        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        _etree.SubElement(CAR, "TmstFirmaResp").text= ts
+        RE = _etree.SubElement(RES, "RecepcionEnvio")
+        _etree.SubElement(RE, "NmbEnvio").text      = nmbenvio
+        _etree.SubElement(RE, "FchRecep").text      = ts
+        _etree.SubElement(RE, "CodEnvio").text      = "1"
+        _etree.SubElement(RE, "EnvioDTEID").text    = set_id
+        _etree.SubElement(RE, "Digest").text        = digest or ""
+        _etree.SubElement(RE, "RutEmisor").text     = rut_emisor_set
+        _etree.SubElement(RE, "RutReceptor").text   = dat["rut"]
+        _etree.SubElement(RE, "EstadoRecepEnv").text= "0"
+        _etree.SubElement(RE, "RecepEnvGlosa").text = "Envio Recibido Conforme"
+        _etree.SubElement(RE, "NroDTE").text        = str(len(dtes_set))
+        for d in dtes_set:
+            es_nuestro = d["rut_recep"] == dat["rut"]
+            RD = _etree.SubElement(RE, "RecepcionDTE")
+            _etree.SubElement(RD, "TipoDTE").text  = d["tipo"]
+            _etree.SubElement(RD, "Folio").text    = d["folio"]
+            _etree.SubElement(RD, "FchEmis").text  = d["fch_emis"]
+            _etree.SubElement(RD, "RUTEmisor").text= d["rut_emisor"]
+            _etree.SubElement(RD, "RUTRecep").text = d["rut_recep"]
+            _etree.SubElement(RD, "MntTotal").text = d["mnt_total"]
+            _etree.SubElement(RD, "EstadoRecepDTE").text = "0" if es_nuestro else "3"
+            _etree.SubElement(RD, "RecepDTEGlosa").text  = "DTE Recibido OK" if es_nuestro else "DTE No Recibido - Error en RUT Receptor"
+        return _etree.tostring(R, xml_declaration=True, encoding="ISO-8859-1", pretty_print=True)
+
+    def _build_recibos():
+        R = _etree.Element("EnvioRecibos", xmlns=NS_SII,
+                           attrib={"{http://www.w3.org/2001/XMLSchema-instance}schemaLocation":
+                                   "http://www.sii.cl/SiiDte EnvioRecibos_v10.xsd", "version": "1.0"})
+        SET = _etree.SubElement(R, "SetRecibos", ID="LibreDTE_SetDteRecibidos")
+        CAR = _etree.SubElement(SET, "Caratula", version="1.0")
+        _etree.SubElement(CAR, "RutResponde").text  = dat["rut"]
+        _etree.SubElement(CAR, "RutRecibe").text    = rut_emisor_set
+        _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
+        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        _etree.SubElement(CAR, "TmstFirmaEnv").text = ts
+        decl = ("El acuse de recibo que se declara en este acto, de acuerdo a lo dispuesto "
+                "en la letra b) del Art. 4, y la letra c) del Art. 5 de la Ley 19.983, "
+                "acredita que la entrega de mercaderias o servicio(s) prestado(s) ha(n) sido recibido(s).")
+        for d in dtes_set:
+            REC = _etree.SubElement(SET, "Recibo", version="1.0")
+            DR  = _etree.SubElement(REC, "DocumentoRecibo", ID=f"LibreDTE_T{d['tipo']}F{d['folio']}")
+            _etree.SubElement(DR, "TipoDoc").text          = d["tipo"]
+            _etree.SubElement(DR, "Folio").text            = d["folio"]
+            _etree.SubElement(DR, "FchEmis").text          = d["fch_emis"]
+            _etree.SubElement(DR, "RUTEmisor").text        = d["rut_emisor"]
+            _etree.SubElement(DR, "RUTRecep").text         = d["rut_recep"]
+            _etree.SubElement(DR, "MntTotal").text         = d["mnt_total"]
+            _etree.SubElement(DR, "Recinto").text          = "Oficina central"
+            _etree.SubElement(DR, "RutFirma").text         = dat["rut_envia"]
+            _etree.SubElement(DR, "Declaracion").text      = decl
+            _etree.SubElement(DR, "TmstFirmaRecibo").text  = ts
+        return _etree.tostring(R, xml_declaration=True, encoding="ISO-8859-1", pretty_print=True)
+
+    def _build_resultado():
+        R = _etree.Element("RespuestaDTE", xmlns=NS_SII,
+                           attrib={"{http://www.w3.org/2001/XMLSchema-instance}schemaLocation":
+                                   "http://www.sii.cl/SiiDte RespuestaEnvioDTE_v10.xsd", "version": "1.0"})
+        RES = _etree.SubElement(R, "Resultado", ID="LibreDTE_ResultadoEnvio")
+        CAR = _etree.SubElement(RES, "Caratula", version="1.0")
+        _etree.SubElement(CAR, "RutResponde").text  = dat["rut"]
+        _etree.SubElement(CAR, "RutRecibe").text    = rut_emisor_set
+        _etree.SubElement(CAR, "IdRespuesta").text  = "1"
+        _etree.SubElement(CAR, "NroDetalles").text  = str(len(dtes_set))
+        _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
+        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        _etree.SubElement(CAR, "TmstFirmaResp").text= ts
+        for i, d in enumerate(dtes_set, 1):
+            es_nuestro = d["rut_recep"] == dat["rut"]
+            RD = _etree.SubElement(RES, "ResultadoDTE")
+            _etree.SubElement(RD, "TipoDTE").text      = d["tipo"]
+            _etree.SubElement(RD, "Folio").text        = d["folio"]
+            _etree.SubElement(RD, "FchEmis").text      = d["fch_emis"]
+            _etree.SubElement(RD, "RUTEmisor").text    = d["rut_emisor"]
+            _etree.SubElement(RD, "RUTRecep").text     = d["rut_recep"]
+            _etree.SubElement(RD, "MntTotal").text     = d["mnt_total"]
+            _etree.SubElement(RD, "CodEnvio").text     = str(i)
+            _etree.SubElement(RD, "EstadoDTE").text    = "0" if es_nuestro else "2"
+            _etree.SubElement(RD, "EstadoDTEGlosa").text = "ACEPTADO OK" if es_nuestro else "RECHAZADO"
+        return _etree.tostring(R, xml_declaration=True, encoding="ISO-8859-1", pretty_print=True)
+
+    def _firmar(js_script: str, xml_bytes: bytes, tmpdir: str, name: str) -> bytes:
+        unsigned = os.path.join(tmpdir, f"{name}.unsigned.xml")
+        signed   = os.path.join(tmpdir, f"{name}.xml")
+        pfx_tmp  = os.path.join(tmpdir, "cert.pfx")
+        with open(unsigned, "wb") as f: f.write(xml_bytes)
+        with open(pfx_tmp,  "wb") as f: f.write(pfx_bytes)
+        r = subprocess.run(
+            ["node", js_script, unsigned, signed, pfx_tmp, dat["_pfx_pass"]],
+            capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"Firma fallida ({name}): {r.stderr}")
+        with open(signed, "rb") as f:
+            return f.read()
+
+    out_dir = get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="etapa3")
+    zip_buf = io.BytesIO()
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xml1 = _firmar(_FIRMA_RESP,  _build_recepcion(), tmpdir, "1_RecepcionDTE")
+            xml2 = _firmar(_FIRMA_RECIB, _build_recibos(),   tmpdir, "2_EnvioRecibos")
+            xml3 = _firmar(_FIRMA_RESP,  _build_resultado(), tmpdir, "3_ResultadoDTE")
+    except Exception as e:
+        raise HTTPException(500, f"Error firmando respuestas: {e}")
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in [
+            ("1_RecepcionDTE.xml", xml1),
+            ("2_EnvioRecibos.xml", xml2),
+            ("3_ResultadoDTE.xml", xml3),
+        ]:
+            zf.writestr(name, content)
+            with open(os.path.join(out_dir, name), "wb") as fh:
+                fh.write(content)
+
+    zip_buf.seek(0)
+    zip_b64 = __import__("base64").b64encode(zip_buf.getvalue()).decode()
+
+    dte_info = [{"tipo": d["tipo"], "folio": d["folio"], "rut_recep": d["rut_recep"],
+                 "monto": d["mnt_total"], "nuestro": d["rut_recep"] == dat["rut"]}
+                for d in dtes_set]
+
+    return JSONResponse({
+        "set_id": set_id, "nmbenvio": nmbenvio,
+        "dtes_en_set": len(dtes_set), "dte_info": dte_info,
+        "archivos": ["1_RecepcionDTE.xml", "2_EnvioRecibos.xml", "3_ResultadoDTE.xml"],
+        "zip_base64": zip_b64,
+    })
+
+
+# ─── ETAPA 4 — Muestras Impresas ─────────────────────────────────────────────
+
+@app.post("/etapa4")
+async def etapa4_muestras(
+    envio_basico:      UploadFile = File(None, description="EnvioDTE Etapa 1 (Set Básico)"),
+    envio_simulacion:  UploadFile = File(None, description="EnvioDTE Etapa 2 (Simulación)"),
+):
+    """
+    Etapa 4 — Genera los PDFs de muestras impresas desde los EnvioDTE de Etapas 1 y 2.
+    Sube los XML firmados y devuelve un ZIP con todos los PDFs listos para el portal SII.
+    """
+    sources = []
+    for upload in [envio_basico, envio_simulacion]:
+        if upload is not None:
+            raw = await upload.read()
+            if raw:
+                sources.append((upload.filename or "envio.xml", raw))
+
+    if not sources:
+        raise HTTPException(422, "Sube al menos un EnvioDTE XML (Etapa 1 o Etapa 2)")
+
+    out_dir    = get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="etapa4")
+    resultados = []
+    zip_buf    = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, xml_bytes in sources:
+            try:
+                dtes = parse_envio_dte(xml_bytes)
+            except Exception as e:
+                raise HTTPException(422, f"Error al parsear {fname}: {e}")
+
+            for dte in dtes:
+                for cedible in ([False, True] if dte.tipo in CEDIBLE_TIPOS else [False]):
+                    suffix   = "_CEDIBLE" if cedible else ""
+                    pdf_name = f"DTE_T{dte.tipo}F{dte.folio}{suffix}.pdf"
+                    pdf_b    = generate_pdf(dte, cedible=cedible)
+                    zf.writestr(pdf_name, pdf_b)
+                    with open(os.path.join(out_dir, pdf_name), "wb") as fh:
+                        fh.write(pdf_b)
+                    val = validate_pdf(pdf_b, pdf_name)
+                    resultados.append({
+                        "folio": dte.folio, "tipo": dte.tipo,
+                        "tipo_nombre": TIPO_NOMBRE.get(dte.tipo, f"Tipo {dte.tipo}"),
+                        "cedible": cedible, "archivo": pdf_name,
+                        "origen": fname,
+                        "validacion": {"aprobado": val.passed, "puntaje": val.score,
+                                       "checks": [{"nombre": c.name, "ok": c.passed, "detalle": c.detail} for c in val.checks]},
+                    })
+
+    zip_buf.seek(0)
+    zip_b64   = __import__("base64").b64encode(zip_buf.getvalue()).decode()
+    aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
+
+    return JSONResponse({
+        "xmls_procesados": len(sources),
+        "pdfs_generados": len(resultados),
+        "aprobados": aprobados,
+        "rechazados": len(resultados) - aprobados,
+        "resultados": resultados,
+        "zip_base64": zip_b64,
+    })
