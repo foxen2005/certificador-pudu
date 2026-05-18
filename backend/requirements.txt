@@ -1,0 +1,8 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+python-multipart==0.0.20
+lxml==5.4.0
+cryptography==44.0.3
+reportlab==4.4.1
+pdf417gen==0.8.0
+PyMuPDF==1.24.14

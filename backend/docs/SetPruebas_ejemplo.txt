@@ -1,0 +1,101 @@
+EMPRESA:          EMPRESA TEST LTDA
+RUT EMPRESA:      76543210-K
+RESOLUCION:       100
+FECHA RESOLUCION: 18-01-2018
+
+SET BASICO                          NUMERO DE ATENCION: 1234567
+
+===========================================================================
+CASO 1234567-1
+DOCUMENTO FACTURA ELECTRONICA
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Notebook HP 15-db                           2            450000
+   Mouse Inalambrico Logitech                  5             25000
+   Teclado USB                                 3             18000
+===========================================================================
+
+===========================================================================
+CASO 1234567-2
+DOCUMENTO FACTURA ELECTRONICA
+DESCUENTO GLOBAL 10%
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Monitor LG 27 pulgadas                      1            320000
+   Cable HDMI 2 metros                         4              8500
+===========================================================================
+
+===========================================================================
+CASO 1234567-3
+DOCUMENTO FACTURA NO AFECTA O EXENTA ELECTRONICA
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Servicio Consultoria IT                      1            150000
+   Capacitacion Usuarios                        1             80000
+===========================================================================
+
+===========================================================================
+CASO 1234567-4
+DOCUMENTO NOTA DE CREDITO ELECTRONICA
+REFERENCIA CASO 1234567-1
+RAZON REFERENCIA DEVOLUCION DE MERCANCIAS
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Notebook HP 15-db                           1            450000
+===========================================================================
+
+===========================================================================
+CASO 1234567-5
+DOCUMENTO NOTA DE DEBITO ELECTRONICA
+REFERENCIA CASO 1234567-2
+RAZON REFERENCIA CORRIGE MONTO
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Diferencia Precio Monitor                    1             15000
+===========================================================================
+
+===========================================================================
+CASO 1234567-6
+DOCUMENTO GUIA DE DESPACHO ELECTRONICA
+TIPO TRASLADO 1
+---------------------------------------------------------------------------
+   ITEM                                 CANTIDAD        PRECIO UNITARIO
+   Escritorio Oficina                           2            180000
+   Silla Ergonomica                             4             95000
+===========================================================================
+
+SET LIBRO DE VENTAS                 NUMERO DE ATENCION: 1234568
+
+SET LIBRO DE COMPRAS                NUMERO DE ATENCION: 1234569
+
+LIBRO DE COMPRAS
+
+COMPRA LC-1
+DOCUMENTO FACTURA ELECTRONICA
+FOLIO: 9801
+FECHA: 15-04-2025
+RUT EMISOR: 88765432-1
+RAZON SOCIAL: PROVEEDOR TECNOLOGIA SA
+MONTO NETO: 420000
+IVA: 79800
+MONTO TOTAL: 499800
+
+COMPRA LC-2
+DOCUMENTO FACTURA ELECTRONICA
+FOLIO: 5542
+FECHA: 20-04-2025
+RUT EMISOR: 77654321-0
+RAZON SOCIAL: DISTRIBUIDORA EQUIPOS LTDA
+MONTO NETO: 280000
+IVA: 53200
+MONTO TOTAL: 333200
+
+COMPRA LC-3
+DOCUMENTO NOTA DE CREDITO ELECTRONICA
+FOLIO: 312
+FECHA: 22-04-2025
+RUT EMISOR: 88765432-1
+RAZON SOCIAL: PROVEEDOR TECNOLOGIA SA
+MONTO NETO: -50000
+IVA: -9500
+MONTO TOTAL: -59500

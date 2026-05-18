@@ -1,0 +1,29 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -t
+      - us-central1-docker.pkg.dev/puduserverdtx/cloud-run-source-deploy/certificador-sii:latest
+      - -f
+      - backend/Dockerfile
+      - backend
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - push
+      - us-central1-docker.pkg.dev/puduserverdtx/cloud-run-source-deploy/certificador-sii:latest
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - certificador-sii
+      - --image
+      - us-central1-docker.pkg.dev/puduserverdtx/cloud-run-source-deploy/certificador-sii:latest
+      - --region
+      - us-central1
+      - --quiet
+
+images:
+  - us-central1-docker.pkg.dev/puduserverdtx/cloud-run-source-deploy/certificador-sii:latest

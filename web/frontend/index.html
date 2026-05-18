@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SII Certificador DTE</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white; padding: 20px 32px;
+      display: flex; align-items: center; gap: 16px;
+    }
+    header h1 { font-size: 1.4rem; font-weight: 600; }
+    header span { font-size: 0.85rem; opacity: 0.7; margin-top: 2px; display: block; }
+    .badge { background: #e63946; color: white; padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; }
+
+    main { max-width: 980px; margin: 32px auto; padding: 0 16px; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+    .tab {
+      padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+      border: 2px solid #e0e0e0; background: white; color: #555; transition: all .2s;
+    }
+    .tab.active { border-color: #e63946; background: #e63946; color: white; font-weight: 600; }
+
+    .card {
+      background: white; border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      padding: 28px; margin-bottom: 20px;
+    }
+    .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: 6px; color: #16213e; }
+    .card .subtitle { font-size: 0.82rem; color: #888; margin-bottom: 20px; }
+
+    /* Upload grid */
+    .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .upload-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+
+    .upload-box {
+      border: 2px dashed #d0d0d0; border-radius: 10px;
+      padding: 18px 14px; cursor: pointer; transition: all .2s;
+      background: #fafafa; text-align: center; position: relative;
+    }
+    .upload-box:hover, .upload-box.drag { border-color: #e63946; background: #fff5f5; }
+    .upload-box.filled { border-color: #2d6a4f; border-style: solid; background: #f0faf4; }
+    .upload-box .icon { font-size: 1.6rem; margin-bottom: 6px; }
+    .upload-box .label { font-size: 0.8rem; font-weight: 600; color: #333; }
+    .upload-box .hint { font-size: 0.73rem; color: #999; margin-top: 3px; }
+    .upload-box .fname {
+      font-size: 0.78rem; color: #2d6a4f; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 100%; margin-top: 4px;
+    }
+    .upload-box .clear-btn {
+      position: absolute; top: 6px; right: 8px;
+      background: none; border: none; cursor: pointer;
+      color: #999; font-size: 0.9rem; line-height: 1;
+    }
+    .upload-box .clear-btn:hover { color: #e63946; }
+    .optional-tag {
+      position: absolute; top: 6px; left: 8px;
+      font-size: 0.65rem; background: #f0f0f0; color: #888;
+      padding: 1px 6px; border-radius: 4px;
+    }
+
+    .btn {
+      padding: 11px 28px; border-radius: 8px; border: none; cursor: pointer;
+      font-size: 0.95rem; font-weight: 600; transition: all .2s;
+    }
+    .btn-primary { background: #e63946; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #c1121f; }
+    .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+    .btn-secondary { background: #f0f2f5; color: #333; }
+    .btn-secondary:hover { background: #e0e2e5; }
+
+    .summary {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;
+    }
+    .stat { text-align: center; padding: 16px; border-radius: 10px; background: #f8f9fa; }
+    .stat .num { font-size: 2rem; font-weight: 700; }
+    .stat .lbl { font-size: 0.8rem; color: #666; margin-top: 4px; }
+    .stat.ok .num { color: #2d6a4f; }
+    .stat.fail .num { color: #e63946; }
+    .stat.info .num { color: #1a73e8; }
+
+    .doc-list { display: flex; flex-direction: column; gap: 8px; }
+    .doc-item { border: 1px solid #e8e8e8; border-radius: 10px; overflow: hidden; }
+    .doc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px; cursor: pointer; background: white;
+    }
+    .doc-header:hover { background: #fafafa; }
+    .doc-info { display: flex; align-items: center; gap: 10px; }
+    .doc-tipo { font-size: 0.75rem; font-weight: 600; padding: 3px 8px; border-radius: 6px; }
+    .t33 { background: #dbeafe; color: #1e40af; }
+    .t34 { background: #d1fae5; color: #065f46; }
+    .t56 { background: #fef3c7; color: #92400e; }
+    .t61 { background: #ede9fe; color: #5b21b6; }
+    .t52 { background: #fce7f3; color: #9d174d; }
+    .doc-name { font-size: 0.88rem; font-weight: 500; }
+    .doc-cedible { font-size: 0.72rem; background: #16213e; color: white; padding: 2px 7px; border-radius: 4px; }
+    .pill { padding: 3px 10px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
+    .pill.ok { background: #d1fae5; color: #065f46; }
+    .pill.fail { background: #fee2e2; color: #991b1b; }
+
+    .doc-checks { padding: 12px 16px; border-top: 1px solid #f0f0f0; background: #fafafa; display: none; }
+    .doc-item.open .doc-checks { display: block; }
+    .check-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 4px 0; font-size: 0.84rem; border-bottom: 1px solid #f0f0f0;
+    }
+    .check-row:last-child { border-bottom: none; }
+    .check-name { flex: 1; font-weight: 500; }
+    .check-detail { color: #888; font-size: 0.79rem; }
+
+    .dl-btn { margin-top: 14px; width: 100%; }
+
+    .loading { text-align: center; padding: 32px; color: #888; }
+    .spinner {
+      width: 36px; height: 36px; border: 3px solid #f0f0f0;
+      border-top-color: #e63946; border-radius: 50%;
+      animation: spin 0.7s linear infinite; margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .alert { padding: 12px 16px; border-radius: 8px; font-size: 0.88rem; margin-bottom: 12px; }
+    .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+    .alert-info { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+
+    input[type=file] { display: none; }
+
+    .section-sep { font-size: 0.78rem; font-weight: 700; color: #888; text-transform: uppercase;
+      letter-spacing: .05em; margin: 18px 0 10px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>SII Certificador DTE</h1>
+    <span>Generación y validación de muestras impresas para certificación electrónica</span>
+  </div>
+  <div style="margin-left:auto"><span class="badge">v1.0</span></div>
+</header>
+
+<main>
+
+  <div class="tabs">
+    <button class="tab active" onclick="setTab('certificar')">Certificar desde Set de Pruebas</button>
+    <button class="tab" onclick="setTab('procesar')">Procesar XML existente</button>
+    <button class="tab" onclick="setTab('validar')">Validar PDF</button>
+  </div>
+
+  <!-- ═══ TAB CERTIFICAR ═══════════════════════════════════════════════ -->
+  <div id="tab-certificar">
+    <div class="card">
+      <h2>Subir archivos del Set de Pruebas SII</h2>
+      <p class="subtitle">El SII entrega estos archivos al momento de iniciar la certificación. Súbelos y generamos todos los XMLs y PDFs necesarios.</p>
+
+      <div class="section-sep">Archivos obligatorios</div>
+      <div class="upload-grid">
+        <div class="upload-box" id="box-set" onclick="pickFile('set','set_pruebas')"
+             ondragover="dOver(event,'box-set')" ondragleave="dLeave('box-set')" ondrop="dDrop(event,'set')">
+          <div class="icon">📋</div>
+          <div class="label">SIISetDePruebas*.txt</div>
+          <div class="hint">Casos de prueba del SII</div>
+          <div class="fname" id="fn-set"></div>
+        </div>
+        <div class="upload-box" id="box-datos" onclick="pickFile('datos','datos')"
+             ondragover="dOver(event,'box-datos')" ondragleave="dLeave('box-datos')" ondrop="dDrop(event,'datos')">
+          <div class="icon">👤</div>
+          <div class="label">DATOS.txt</div>
+          <div class="hint">RUT empresa, representante, clave PFX</div>
+          <div class="fname" id="fn-datos"></div>
+        </div>
+        <div class="upload-box" id="box-pfx" onclick="pickFile('pfx','pfx')"
+             ondragover="dOver(event,'box-pfx')" ondragleave="dLeave('box-pfx')" ondrop="dDrop(event,'pfx')">
+          <div class="icon">🔑</div>
+          <div class="label">Certificado .pfx</div>
+          <div class="hint">Firma digital del representante</div>
+          <div class="fname" id="fn-pfx"></div>
+        </div>
+      </div>
+
+      <div class="section-sep">CAFs (uno por tipo de documento a certificar)</div>
+      <div class="upload-grid three">
+        <div class="upload-box" id="box-caf33" onclick="pickFile('caf33','caf_33')"
+             ondragover="dOver(event,'box-caf33')" ondragleave="dLeave('box-caf33')" ondrop="dDrop(event,'caf33')">
+          <span class="optional-tag">T33</span>
+          <div class="icon">🧾</div>
+          <div class="label">CAF Factura Electrónica</div>
+          <div class="hint">dte33d1a100.xml</div>
+          <div class="fname" id="fn-caf33"></div>
+        </div>
+        <div class="upload-box" id="box-caf61" onclick="pickFile('caf61','caf_61')"
+             ondragover="dOver(event,'box-caf61')" ondragleave="dLeave('box-caf61')" ondrop="dDrop(event,'caf61')">
+          <span class="optional-tag">T61</span>
+          <div class="icon">📉</div>
+          <div class="label">CAF Nota de Crédito</div>
+          <div class="hint">dte61d1a100.xml</div>
+          <div class="fname" id="fn-caf61"></div>
+        </div>
+        <div class="upload-box" id="box-caf56" onclick="pickFile('caf56','caf_56')"
+             ondragover="dOver(event,'box-caf56')" ondragleave="dLeave('box-caf56')" ondrop="dDrop(event,'caf56')">
+          <span class="optional-tag">T56</span>
+          <div class="icon">📈</div>
+          <div class="label">CAF Nota de Débito</div>
+          <div class="hint">dte56d1a100.xml</div>
+          <div class="fname" id="fn-caf56"></div>
+        </div>
+        <div class="upload-box" id="box-caf52" onclick="pickFile('caf52','caf_52')"
+             ondragover="dOver(event,'box-caf52')" ondragleave="dLeave('box-caf52')" ondrop="dDrop(event,'caf52')">
+          <span class="optional-tag">T52</span>
+          <div class="icon">🚚</div>
+          <div class="label">CAF Guía de Despacho</div>
+          <div class="hint">dte52d1a100.xml</div>
+          <div class="fname" id="fn-caf52"></div>
+        </div>
+        <div class="upload-box" id="box-caf46" onclick="pickFile('caf46','caf_46')"
+             ondragover="dOver(event,'box-caf46')" ondragleave="dLeave('box-caf46')" ondrop="dDrop(event,'caf46')">
+          <span class="optional-tag">T46</span>
+          <div class="icon">🏭</div>
+          <div class="label">CAF Factura de Compra</div>
+          <div class="hint">dte46d1a100.xml</div>
+          <div class="fname" id="fn-caf46"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:20px; display:flex; gap:10px; align-items:center">
+        <button class="btn btn-primary" id="btn-cert" onclick="certificar()" disabled>
+          Generar XMLs y PDFs
+        </button>
+        <span id="cert-status" style="font-size:.83rem;color:#888"></span>
+      </div>
+    </div>
+    <div id="result-certificar"></div>
+  </div>
+
+  <!-- ═══ TAB PROCESAR XML ══════════════════════════════════════════════ -->
+  <div id="tab-procesar" style="display:none">
+    <div class="card">
+      <h2>Procesar EnvioDTE XML existente</h2>
+      <p class="subtitle">Si ya tienes un XML EnvioDTE firmado, súbelo para generar los PDFs y validarlos.</p>
+      <div class="upload-box" id="box-xml" style="max-width:400px"
+           onclick="pickFile('xml','xml_envio')"
+           ondragover="dOver(event,'box-xml')" ondragleave="dLeave('box-xml')" ondrop="dDrop(event,'xml')">
+        <div class="icon">📄</div>
+        <div class="label">EnvioDTE_*.xml</div>
+        <div class="hint">Arrastra o haz clic para seleccionar</div>
+        <div class="fname" id="fn-xml"></div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" id="btn-proc" onclick="procesarXml()" disabled>
+          Generar y Validar PDFs
+        </button>
+      </div>
+    </div>
+    <div id="result-procesar"></div>
+  </div>
+
+  <!-- ═══ TAB VALIDAR PDF ═══════════════════════════════════════════════ -->
+  <div id="tab-validar" style="display:none">
+    <div class="card">
+      <h2>Validar PDF de muestra impresa</h2>
+      <p class="subtitle">Valida un PDF individual contra los requisitos del Manual de Muestras Impresas del SII.</p>
+      <div class="upload-box" id="box-pdf" style="max-width:400px"
+           onclick="pickFile('pdf','pdf_file')"
+           ondragover="dOver(event,'box-pdf')" ondragleave="dLeave('box-pdf')" ondrop="dDrop(event,'pdf')">
+        <div class="icon">🖨️</div>
+        <div class="label">*.pdf</div>
+        <div class="hint">Muestra impresa DTE — máx. 500 KB</div>
+        <div class="fname" id="fn-pdf"></div>
+      </div>
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" id="btn-val" onclick="validarPdf()" disabled>
+          Validar PDF
+        </button>
+      </div>
+    </div>
+    <div id="result-validar"></div>
+  </div>
+
+</main>
+
+<!-- Hidden file inputs -->
+<input type="file" id="input-set"   accept=".txt"  onchange="onPick(this,'set')">
+<input type="file" id="input-datos" accept=".txt"  onchange="onPick(this,'datos')">
+<input type="file" id="input-pfx"   accept=".pfx"  onchange="onPick(this,'pfx')">
+<input type="file" id="input-caf33" accept=".xml"  onchange="onPick(this,'caf33')">
+<input type="file" id="input-caf61" accept=".xml"  onchange="onPick(this,'caf61')">
+<input type="file" id="input-caf56" accept=".xml"  onchange="onPick(this,'caf56')">
+<input type="file" id="input-caf52" accept=".xml"  onchange="onPick(this,'caf52')">
+<input type="file" id="input-caf46" accept=".xml"  onchange="onPick(this,'caf46')">
+<input type="file" id="input-xml"   accept=".xml"  onchange="onPick(this,'xml')">
+<input type="file" id="input-pdf"   accept=".pdf"  onchange="onPick(this,'pdf')">
+
+<script>
+const API = "http://localhost:8000";
+const files = {};
+
+// ─── Tab switching ────────────────────────────────────────────────────────
+function setTab(t) {
+  ["certificar","procesar","validar"].forEach(id => {
+    document.getElementById(`tab-${id}`).style.display = id === t ? "" : "none";
+  });
+  document.querySelectorAll(".tab").forEach((el,i) => {
+    el.classList.toggle("active", ["certificar","procesar","validar"][i] === t);
+  });
+}
+
+// ─── File handling ────────────────────────────────────────────────────────
+const INPUT_MAP = {
+  set: "set", datos: "datos", pfx: "pfx",
+  caf33: "caf33", caf61: "caf61", caf56: "caf56", caf52: "caf52", caf46: "caf46",
+  xml: "xml", pdf: "pdf"
+};
+
+function pickFile(key) {
+  document.getElementById(`input-${INPUT_MAP[key]}`).click();
+}
+
+function onPick(input, key) {
+  if (input.files[0]) setFile(key, input.files[0]);
+}
+
+function setFile(key, f) {
+  files[key] = f;
+  const box = document.getElementById(`box-${key}`);
+  const fn  = document.getElementById(`fn-${key}`);
+  if (box) box.classList.add("filled");
+  if (fn)  fn.textContent = `✓ ${f.name}`;
+  checkReady();
+}
+
+function dOver(e, id)  { e.preventDefault(); document.getElementById(id).classList.add("drag"); }
+function dLeave(id)    { document.getElementById(id).classList.remove("drag"); }
+function dDrop(e, key) {
+  e.preventDefault();
+  const id = `box-${key}`;
+  dLeave(id);
+  const f = e.dataTransfer.files[0];
+  if (f) { setFile(key, f); document.getElementById(`input-${INPUT_MAP[key]}`).value = ""; }
+}
+
+function checkReady() {
+  // Certificar: obligatorios son set + datos + pfx + al menos 1 CAF
+  const hasRequired = files.set && files.datos && files.pfx;
+  const hasCaf = files.caf33 || files.caf61 || files.caf56 || files.caf52 || files.caf46;
+  document.getElementById("btn-cert").disabled = !(hasRequired && hasCaf);
+  document.getElementById("btn-proc").disabled = !files.xml;
+  document.getElementById("btn-val").disabled  = !files.pdf;
+}
+
+// ─── Helpers de UI ────────────────────────────────────────────────────────
+function tipoClass(tipo) {
+  return {33:"t33",34:"t34",56:"t56",61:"t61",52:"t52",46:"t33"}[tipo] || "t33";
+}
+
+function renderChecks(checks) {
+  return checks.map(c => `
+    <div class="check-row">
+      <span>${c.ok ? "✅" : "❌"}</span>
+      <span class="check-name">${c.nombre}</span>
+      <span class="check-detail">${c.detalle || ""}</span>
+    </div>`).join("");
+}
+
+function renderResultados(data, target) {
+  const aten = data.nro_atencion ? `<div style="font-size:.83rem;color:#888;margin-bottom:12px">N° Atención SII: <b>${data.nro_atencion}</b></div>` : "";
+  const summary = `
+    ${aten}
+    <div class="summary">
+      <div class="stat info"><div class="num">${data.documentos}</div><div class="lbl">DTEs</div></div>
+      <div class="stat info"><div class="num">${data.pdfs_generados}</div><div class="lbl">PDFs</div></div>
+      <div class="stat ok"><div class="num">${data.aprobados}</div><div class="lbl">Aprobados</div></div>
+      <div class="stat fail"><div class="num">${data.rechazados}</div><div class="lbl">Rechazados</div></div>
+    </div>`;
+
+  const docs = (data.resultados || []).map((r,i) => `
+    <div class="doc-item" id="${target}-doc-${i}">
+      <div class="doc-header" onclick="toggleDoc('${target}',${i})">
+        <div class="doc-info">
+          <span class="doc-tipo ${tipoClass(r.tipo)}">${r.tipo_nombre.split(" ").slice(0,2).join(" ")}</span>
+          <span class="doc-name">${r.archivo}</span>
+          ${r.cedible ? '<span class="doc-cedible">CEDIBLE</span>' : ""}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:.78rem;color:#aaa">${r.validacion.puntaje} checks</span>
+          <span class="pill ${r.validacion.aprobado?"ok":"fail"}">${r.validacion.aprobado?"✓ OK":"✗ FALLA"}</span>
+          <span style="color:#ccc">▾</span>
+        </div>
+      </div>
+      <div class="doc-checks">${renderChecks(r.validacion.checks)}</div>
+    </div>`).join("");
+
+  const dl = `<button class="btn btn-primary dl-btn" onclick="descargarZip('${target}')">⬇ Descargar XML + PDFs (.zip)</button>`;
+
+  document.getElementById(`result-${target}`).innerHTML =
+    `<div class="card"><h2>Resultados</h2>${summary}<div class="doc-list">${docs}</div>${dl}</div>`;
+}
+
+function toggleDoc(target, i) {
+  document.getElementById(`${target}-doc-${i}`).classList.toggle("open");
+}
+
+const zipCache = {};
+
+function descargarZip(target) {
+  const z = zipCache[target];
+  if (!z) return;
+  const a = document.createElement("a");
+  a.href = "data:application/zip;base64," + z;
+  a.download = `certificacion_${target}.zip`;
+  a.click();
+}
+
+function showLoading(target, msg) {
+  document.getElementById(`result-${target}`).innerHTML =
+    `<div class="card loading"><div class="spinner"></div>${msg}</div>`;
+}
+
+function showError(target, msg) {
+  document.getElementById(`result-${target}`).innerHTML =
+    `<div class="card"><div class="alert alert-error">❌ ${msg}</div></div>`;
+}
+
+// ─── Endpoint: /certificar ────────────────────────────────────────────────
+async function certificar() {
+  const btn = document.getElementById("btn-cert");
+  btn.disabled = true;
+  document.getElementById("cert-status").textContent = "";
+  showLoading("certificar", "Generando XMLs firmados y PDFs…");
+
+  const fd = new FormData();
+  fd.append("set_pruebas", files.set);
+  fd.append("datos", files.datos);
+  fd.append("pfx", files.pfx);
+  if (files.caf33) fd.append("caf_33", files.caf33);
+  if (files.caf56) fd.append("caf_56", files.caf56);
+  if (files.caf61) fd.append("caf_61", files.caf61);
+  if (files.caf52) fd.append("caf_52", files.caf52);
+  if (files.caf46) fd.append("caf_46", files.caf46);
+
+  try {
+    const res = await fetch(`${API}/certificar`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Error del servidor");
+    zipCache["certificar"] = data.zip_base64;
+    renderResultados(data, "certificar");
+  } catch(e) {
+    showError("certificar", e.message);
+  } finally {
+    btn.disabled = false;
+    checkReady();
+  }
+}
+
+// ─── Endpoint: /procesar ─────────────────────────────────────────────────
+async function procesarXml() {
+  const btn = document.getElementById("btn-proc");
+  btn.disabled = true;
+  showLoading("procesar", "Procesando XML…");
+
+  const fd = new FormData();
+  fd.append("file", files.xml);
+
+  try {
+    const res = await fetch(`${API}/procesar`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Error del servidor");
+    zipCache["procesar"] = data.zip_base64;
+    renderResultados(data, "procesar");
+  } catch(e) {
+    showError("procesar", e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─── Endpoint: /validar ──────────────────────────────────────────────────
+async function validarPdf() {
+  const btn = document.getElementById("btn-val");
+  btn.disabled = true;
+  showLoading("validar", "Validando PDF…");
+
+  const fd = new FormData();
+  fd.append("file", files.pdf);
+
+  try {
+    const res = await fetch(`${API}/validar`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Error del servidor");
+
+    document.getElementById("result-validar").innerHTML = `
+      <div class="card">
+        <h2>${data.archivo}</h2>
+        <div class="summary" style="grid-template-columns:repeat(2,1fr);max-width:320px">
+          <div class="stat ${data.aprobado?"ok":"fail"}">
+            <div class="num">${data.aprobado?"✓":"✗"}</div>
+            <div class="lbl">${data.aprobado?"Aprobado":"Rechazado"}</div>
+          </div>
+          <div class="stat info"><div class="num">${data.puntaje}</div><div class="lbl">Checks OK</div></div>
+        </div>
+        <div style="margin-top:12px">${renderChecks(data.checks)}</div>
+      </div>`;
+  } catch(e) {
+    showError("validar", e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+# Datos sensibles — NUNCA subir
+sets/
+output/
+
+# Certificados y claves privadas
+*.p12
+*.pfx
+*.pem
+*.key
+DATOS.txt
+
+# Generados
+backend/test_output/
+backend/__pycache__/
+backend/builders/__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node
+**/node_modules/
+bun.lock
+bun.lockb
+
+# Entorno
+.env
+.env.*
+!.env.example
+
+# Documentación, legacy y mecánicas de trabajo
+Documentacion/
+legacy/
+mecanicas/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
