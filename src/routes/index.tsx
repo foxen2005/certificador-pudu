@@ -333,7 +333,7 @@ function Etapa1Step({
               size="sm"
               variant="outline"
               className="border-green-400 text-green-700 hover:bg-green-100"
-              onClick={() => downloadB64(result.zip_b64, "etapa1_certificacion.zip")}
+              onClick={() => downloadB64(result.zip_base64 ?? "", "etapa1_certificacion.zip")}
             >
               <Download className="mr-1 h-4 w-4" /> Descargar ZIP
             </Button>
@@ -435,7 +435,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
             <CheckCircle2 className="h-5 w-5 text-green-600" />
             <div className="flex-1 text-sm text-green-800"><strong>Simulación generada.</strong></div>
             <Button size="sm" variant="outline" className="border-green-400 text-green-700 hover:bg-green-100"
-              onClick={() => downloadB64(result.zip_b64, "etapa2_simulacion.zip")}>
+              onClick={() => downloadB64(result.zip_base64 ?? "", "etapa2_simulacion.zip")}>
               <Download className="mr-1 h-4 w-4" /> Descargar ZIP
             </Button>
           </div>
@@ -542,7 +542,7 @@ function Etapa3Step({ onDone }: { onDone: () => void }) {
               <strong>3 archivos generados.</strong> Descarga y súbelos al portal en este orden exacto.
             </div>
             <Button size="sm" variant="outline" className="border-green-400 text-green-700 hover:bg-green-100"
-              onClick={() => downloadB64(result.zip_b64, "etapa3_intercambio.zip")}>
+              onClick={() => downloadB64(result.zip_base64 ?? "", "etapa3_intercambio.zip")}>
               <Download className="mr-1 h-4 w-4" /> Descargar ZIP
             </Button>
           </div>
@@ -652,7 +652,7 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
               <strong>PDFs generados.</strong> Descarga y súbelos al portal SII.
             </div>
             <Button size="sm" variant="outline" className="border-green-400 text-green-700 hover:bg-green-100"
-              onClick={() => downloadB64(result.zip_b64, "etapa4_muestras.zip")}>
+              onClick={() => downloadB64(result.zip_base64 ?? "", "etapa4_muestras.zip")}>
               <Download className="mr-1 h-4 w-4" /> Descargar 16 PDFs
             </Button>
           </div>
