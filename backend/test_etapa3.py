@@ -13,14 +13,14 @@ Uso:
 import os, sys, re, datetime, subprocess
 from lxml import etree
 
-PUDU_SET  = r"f:\PUDU\Certificador Pudu\sets\pudu_78392059K"
-OUT_BASE  = r"f:\PUDU\Certificador Pudu\output"
-FIRMA_RESP   = r"f:\PUDU\Certificador Pudu\verify\firmar_respuesta_dte.js"
-FIRMA_RECIB  = r"f:\PUDU\Certificador Pudu\verify\firmar_envio_recibos.js"
+PUDU_SET  = r"d:\PUDU\Certificador Pudu\sets\pudu_78392059K"
+OUT_BASE  = r"d:\PUDU\Certificador Pudu\output"
+FIRMA_RESP   = r"d:\PUDU\Certificador Pudu\verify\firmar_respuesta_dte.js"
+FIRMA_RECIB  = r"d:\PUDU\Certificador Pudu\verify\firmar_envio_recibos.js"
 NS = "http://www.sii.cl/SiiDte"
 
 SET_XML = sys.argv[1] if len(sys.argv) > 1 else \
-    r"f:\PUDU\Certificador Pudu\sets\pudu_78392059K\epata3_ENVIO_DTE_4832678.xml"
+    r"d:\PUDU\Certificador Pudu\sets\pudu_78392059K\epata3_ENVIO_DTE_4832678.xml"
 
 
 def leer_datos(path):

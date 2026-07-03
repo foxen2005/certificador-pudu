@@ -4,7 +4,7 @@
  */
 const fs = require('fs');
 const { DOMParser } = require('@xmldom/xmldom');
-const { signInPlace, parseCertificate } = require('f:/PUDU/SII_pudu_Server/src/signer');
+const { signInPlace, parseCertificate } = require('d:/PUDU/SII_pudu_Server/src/signer');
 
 const [,,inputPath, outputPath, p12Path, p12Pass] = process.argv;
 const NS = 'http://www.sii.cl/SiiDte';

@@ -13,11 +13,11 @@ import os, datetime
 from parser import parse_envio_dte, CEDIBLE_TIPOS
 from generator import generate_pdf
 
-OUT_BASE = r"f:\PUDU\Certificador Pudu\output"
+OUT_BASE = r"d:\PUDU\Certificador Pudu\output"
 
 SOURCES = [
-    r"f:\PUDU\Certificador Pudu\output\certificacion_20260517_2009\EnvioDTE_78392059K.xml",
-    r"f:\PUDU\Certificador Pudu\output\etapa2_20260517_2318\EnvioDTE_78392059K.xml",
+    r"d:\PUDU\Certificador Pudu\output\certificacion_20260517_2009\EnvioDTE_78392059K.xml",
+    r"d:\PUDU\Certificador Pudu\output\etapa2_20260517_2318\EnvioDTE_78392059K.xml",
 ]
 
 

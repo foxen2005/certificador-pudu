@@ -13,8 +13,8 @@ import sys
 import os
 import datetime
 
-PUDU_SET    = r"f:\PUDU\Certificador Pudu\sets\pudu_78392059K"
-OUTPUT_BASE = r"f:\PUDU\Certificador Pudu\output"
+PUDU_SET    = r"d:\PUDU\Certificador Pudu\sets\pudu_78392059K"
+OUTPUT_BASE = r"d:\PUDU\Certificador Pudu\output"
 OUTPUT_DIR = os.path.join(OUTPUT_BASE, datetime.datetime.now().strftime("certificacion_%Y%m%d_%H%M"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -27,7 +27,7 @@ from validator import validate_pdf
 from libro_builder import build_unsigned_libro_ventas, build_unsigned_libro_compras
 
 
-LIBRO_SIGNER_JS = r"f:\PUDU\Certificador Pudu\verify\firmar_libro.js"
+LIBRO_SIGNER_JS = r"d:\PUDU\Certificador Pudu\verify\firmar_libro.js"
 
 
 def _firmar_libro_node(unsigned_xml: bytes, p12_path: str, pfx_password: str, out_dir: str, label: str) -> bytes:
@@ -86,7 +86,7 @@ def run():
     # ── 1. Leer archivos del set ──────────────────────────────────────────────
     print("\n[1/6] Leyendo archivos del set PUDU...")
 
-    set_path  = r"f:\PUDU\Certificador Pudu\sets\SIISetDePruebas78392059K-1705.txt"
+    set_path  = r"d:\PUDU\Certificador Pudu\sets\SIISetDePruebas78392059K-1705.txt"
     datos_path = os.path.join(PUDU_SET, "DATOS.txt")
     p12_path  = os.path.join(PUDU_SET, "15996452-3_2025-11-14.p12")
 
@@ -215,7 +215,7 @@ def run():
 
     # 5b. Firmar con Node.js (xml-crypto, igual que pudu server en producción)
     envio_path = os.path.join(OUTPUT_DIR, f"EnvioDTE_{rut_clean}.xml")
-    signer_js   = r"f:\PUDU\Certificador Pudu\verify\firmar_envio.js"
+    signer_js   = r"d:\PUDU\Certificador Pudu\verify\firmar_envio.js"
     import subprocess
     result = subprocess.run(
         ["node", signer_js, unsigned_path, envio_path, p12_path, pfx_password],

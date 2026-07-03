@@ -8,15 +8,15 @@
 const fs   = require('fs');
 const path = require('path');
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
-const { signInPlace, parseCertificate } = require('f:/PUDU/SII_pudu_Server/src/signer');
+const { signInPlace, parseCertificate } = require('d:/PUDU/SII_pudu_Server/src/signer');
 
 const NS_SIG = 'http://www.w3.org/2000/09/xmldsig#';
 const NS_DTE = 'http://www.sii.cl/SiiDte';
 
-const outDir = 'f:/PUDU/Certificador Pudu/output';
+const outDir = 'd:/PUDU/Certificador Pudu/output';
 const last   = fs.readdirSync(outDir).filter(d => d.startsWith('certificacion_')).sort().at(-1);
 const xmlPath = path.join(outDir, last, 'EnvioDTE_78392059K.xml');
-const p12Path = 'f:/PUDU/Certificador Pudu/sets/pudu_78392059K/15996452-3_2025-11-14.p12';
+const p12Path = 'd:/PUDU/Certificador Pudu/sets/pudu_78392059K/15996452-3_2025-11-14.p12';
 
 console.log('Base:', last);
 const rawXml = fs.readFileSync(xmlPath, 'latin1');

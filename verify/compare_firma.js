@@ -8,16 +8,16 @@ const path = require('path');
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 
 // Importar signer.js del pudu server (usa xml-crypto + node-forge)
-const { signInPlace } = require('f:/PUDU/SII_pudu_Server/src/signer');
+const { signInPlace } = require('d:/PUDU/SII_pudu_Server/src/signer');
 
 const NS_SIG = 'http://www.w3.org/2000/09/xmldsig#';
 const NS_DTE = 'http://www.sii.cl/SiiDte';
 
 // Último output generado
-const outDir = 'f:/PUDU/Certificador Pudu/output';
+const outDir = 'd:/PUDU/Certificador Pudu/output';
 const last   = fs.readdirSync(outDir).filter(d => d.startsWith('certificacion_')).sort().at(-1);
 const xmlPath = path.join(outDir, last, 'EnvioDTE_78392059K.xml');
-const p12Path = 'f:/PUDU/Certificador Pudu/sets/pudu_78392059K/15996452-3_2025-11-14.p12';
+const p12Path = 'd:/PUDU/Certificador Pudu/sets/pudu_78392059K/15996452-3_2025-11-14.p12';
 const p12Pass = '2409';
 
 console.log('Certificacion:', last);
@@ -29,7 +29,7 @@ const doc    = new DOMParser().parseFromString(rawXml, 'text/xml');
 const ser    = new XMLSerializer();
 
 // Cargar certificado
-const { parseCertificate } = require('f:/PUDU/SII_pudu_Server/src/signer');
+const { parseCertificate } = require('d:/PUDU/SII_pudu_Server/src/signer');
 const p12Buf  = fs.readFileSync(p12Path);
 const cert    = parseCertificate(p12Buf, p12Pass);
 

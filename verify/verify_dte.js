@@ -5,7 +5,7 @@ const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 
 let xmlPath = process.argv[2];
 if (!xmlPath) {
-  const outDir = 'f:/PUDU/Certificador Pudu/output';
+  const outDir = 'd:/PUDU/Certificador Pudu/output';
   const last = fs.readdirSync(outDir).filter(d => d.startsWith('certificacion_')).sort().at(-1);
   xmlPath = path.join(outDir, last, 'EnvioDTE_78392059K.xml');
 }

@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from lxml import etree
 from dte_builder import CAF, build_ted
 
-PUDU_SET    = r"f:\PUDU\Certificador Pudu\sets\pudu_78392059K"
-OUTPUT_BASE = r"f:\PUDU\Certificador Pudu\output"
-FIRMA_JS    = r"f:\PUDU\Certificador Pudu\verify\firmar_envio.js"
+PUDU_SET    = r"d:\PUDU\Certificador Pudu\sets\pudu_78392059K"
+OUTPUT_BASE = r"d:\PUDU\Certificador Pudu\output"
+FIRMA_JS    = r"d:\PUDU\Certificador Pudu\verify\firmar_envio.js"
 NS_DTE = "http://www.sii.cl/SiiDte"
 
 

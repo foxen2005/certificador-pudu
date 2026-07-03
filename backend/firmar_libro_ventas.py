@@ -13,9 +13,9 @@ import sys
 import datetime
 import subprocess
 
-PUDU_SET    = r"f:\PUDU\Certificador Pudu\sets\pudu_78392059K"
-OUTPUT_BASE = r"f:\PUDU\Certificador Pudu\output"
-LIBRO_SIGNER_JS = r"f:\PUDU\Certificador Pudu\verify\firmar_libro.js"
+PUDU_SET    = r"d:\PUDU\Certificador Pudu\sets\pudu_78392059K"
+OUTPUT_BASE = r"d:\PUDU\Certificador Pudu\output"
+LIBRO_SIGNER_JS = r"d:\PUDU\Certificador Pudu\verify\firmar_libro.js"
 
 from set_parser import parse_set_pruebas
 from dte_builder import CAF, build_dte_xml
