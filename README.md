@@ -10,11 +10,15 @@ y PDFs validados según el Manual SII 4.0.
 
 ## Estructura del proyecto
 
+> Nota: el drive cambió de F: a D: tras el reformateo (jun-2026). Usar siempre `d:\PUDU\`.
+> El frontend fue reescrito — ya NO vive en `web\` (esa carpeta quedó huérfana, solo con
+> lockfiles de bun). El wizard actual vive en `src\` en la raíz del proyecto (TanStack Start).
+
 ```
-f:\PUDU\Certificador Pudu\
+d:\PUDU\Certificador Pudu\
 ├── README.md               ← este archivo
 ├── MEMORIES.md             ← referencia a memorias globales (lecciones SII)
-├── backend\                ← código Python (generación + firma)
+├── backend\                ← código Python (generación + firma) — deploy: GCP Cloud Run
 │   ├── builders\           ← módulos reutilizables (sign_via_pudu, c14n, etc.)
 │   │   ├── common.py       ← helpers compartidos
 │   │   ├── envio_dte.py    ← construcción y firma EnvioDTE
@@ -28,7 +32,8 @@ f:\PUDU\Certificador Pudu\
 │   ├── validator.py        ← validación de PDFs (12 checks)
 │   ├── test_certificacion.py  ← script principal (genera y firma todo)
 │   ├── firmar_libro_ventas.py ← script enfocado solo en libro de ventas
-│   ├── main.py             ← API FastAPI (HTTP endpoints)
+│   ├── main.py             ← API FastAPI (endpoints: /certificar, /procesar, /validar, /etapa2, /etapa3, /etapa4)
+│   ├── Dockerfile          ← Python 3.12-slim, OPENSSL_CONF=openssl_legacy.cnf (certs SII con RC2-40/3DES+SHA1)
 │   ├── docs\               ← documentación interna
 │   └── legacy\             ← versiones viejas de builders (referencia)
 ├── verify\                 ← scripts Node.js de verificación y firma
@@ -37,11 +42,15 @@ f:\PUDU\Certificador Pudu\
 │   ├── verify_dte.js       ← verifica firmas con xml-crypto
 │   ├── compare_firma.js    ← compara firma Python vs pudu server
 │   └── node_modules\
-├── web\                    ← frontend (React + TanStack)
-│   ├── src\                ← código TypeScript/React
-│   ├── frontend\           ← assets
-│   ├── supabase\           ← config Supabase
-│   └── package.json, vite.config.ts, etc.
+├── src\                    ← frontend actual: wizard TanStack Start + React 19 + shadcn/Radix
+│   ├── routes\
+│   │   ├── index.tsx       ← CertWizard — UI paso a paso (setup/etapa1-4)
+│   │   └── api\sii.$.ts    ← proxy /api/sii/* → backend Cloud Run (auth OIDC service account o bearer estático)
+│   ├── components\, hooks\, integrations\supabase\, lib\
+├── web\                    ← OBSOLETO — solo quedan lockfiles de bun, no usar
+├── frontend\               ← OBSOLETO — solo un index.html stub
+├── wrangler.jsonc          ← deploy del wizard a Cloudflare Workers (name: certificador-pudu)
+├── Documentacion\          ← manuales SII de referencia (formatos DTE, boleta, AEC, esquemas XML)
 ├── sets\                   ← sets de prueba SII
 │   ├── pudu_78392059K\     ← set actual de PUDU TECNOLOGIA SPA
 │   │   ├── SIISetDePruebas78392059K.txt   ← set de pruebas
@@ -62,7 +71,21 @@ f:\PUDU\Certificador Pudu\
 │   ├── certificar.py       ← script viejo Cloud Run
 │   ├── INSTRUCCIONES.txt   ← instrucciones del flujo viejo
 │   └── ...
-└── cloudbuild.yaml         ← config GCP (deploy del API FastAPI)
+└── cloudbuild.yaml         ← config GCP (deploy del API FastAPI a Cloud Run, servicio `certificador-sii`)
+```
+
+## Despliegue (arquitectura actual)
+
+Dos despliegues separados, conectados por un proxy:
+
+1. **Backend Python (FastAPI)** → GCP Cloud Run, servicio `certificador-sii` (`cloudbuild.yaml` + `backend/Dockerfile`). Push a `main` dispara Cloud Build.
+2. **Frontend wizard (TanStack Start)** → Cloudflare Workers (`wrangler.jsonc`, name `certificador-pudu`). Todas las llamadas a `/api/sii/*` pasan por `src/routes/api/sii.$.ts`, que firma un JWT y pide un ID token OIDC a Google (usando el service account en el secret `GCP_SA_KEY_JSON`) para autenticar contra Cloud Run — o usa `SII_BACKEND_TOKEN` como fallback estático.
+
+```bash
+# Frontend local
+npm run dev        # vite dev — sirve el wizard
+npm run build       # build para Cloudflare Workers
+npx wrangler deploy # deploy manual si no hay CI configurado
 ```
 
 ---

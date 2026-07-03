@@ -3,10 +3,17 @@
 Las memorias globales del agente (Claude) están en:
 
 ```
-C:\Users\DigitalFox\.claude\projects\f--SandBox\memory\
+C:\Users\DigitalFox\.claude\projects\d--SandBox\memory\
 ```
 
-## Memorias relevantes para este proyecto
+> ⚠️ Tras el reformateo (drive F: → D:, jun-2026) la carpeta de memoria quedó en un
+> namespace nuevo (`d--SandBox`, antes `f--SandBox`, que ya no existe). Los 4 archivos
+> listados abajo **no existen hoy** en `d--SandBox/memory/` — se perdieron en la migración
+> y nunca se recrearon. En particular `sii_certificador_lessons.md` (el catálogo de errores
+> SII) es información valiosa que se debería reconstruir a partir de lo que se recuerde o
+> de `backend/REGISTRO_ENVIOS.md` y los comentarios en `test_certificacion.py`.
+
+## Memorias relevantes para este proyecto (histórico — verificar si existen antes de asumir)
 
 | Archivo | Propósito |
 |---|---|

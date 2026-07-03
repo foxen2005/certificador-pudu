@@ -39,12 +39,8 @@ El frontend React espera el backend en `http://localhost:8000` por defecto.
 
 ## Despliegue en producción
 
-El backend **no puede correr en Cloudflare Workers** por sus dependencias nativas (`lxml`, `cryptography`, `reportlab`).
+El backend **no puede correr en Cloudflare Workers** por sus dependencias nativas (`lxml`, `cryptography`, `reportlab`) — por eso el frontend (`../src`, TanStack Start) se despliega aparte en Cloudflare Workers y este backend va a **GCP Cloud Run**.
 
-Opciones recomendadas:
-- **Railway** — conecta el repo GitHub, apunta a `backend/`, usa `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- **Render** — igual a Railway
-- **Fly.io** — usa el `Dockerfile` si se agrega
-- **VPS** — instalar Python 3.11+ y correr con systemd o supervisor
+Deploy real: `../cloudbuild.yaml` construye `Dockerfile` (Python 3.12-slim) y hace `gcloud run deploy` al servicio `certificador-sii` en `us-central1` — se dispara con push a `main`, no manualmente.
 
-Una vez desplegado, configura la variable `SII_BACKEND_URL` en Lovable → Secrets con la URL pública del backend.
+El frontend le apunta a través del proxy `src/routes/api/sii.$.ts`, que autentica contra Cloud Run con un ID token OIDC (service account en el secret `GCP_SA_KEY_JSON`) o con `SII_BACKEND_TOKEN` como fallback estático — no se usa `SII_BACKEND_URL` vía Lovable Secrets, eso quedó obsoleto.
