@@ -179,10 +179,12 @@ def run():
 
     # Folios ya enviados al SII (se acumulan con cada envío para evitar DTE-3-100 Repetido)
     # Actualizar después de cada envío exitoso.
+    # Fuente de verdad: sets/pudu_78392059K/certificacion_final/RESUMEN_CERTIFICACION.md
+    # (última certificación real aceptada por el SII, 2026-05-18: T33 1-37, T56 1-10, T61 1-28).
     FOLIOS_YA_ENVIADOS: dict[int, set] = {
-        33: {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36},
-        56: {1, 2, 3, 4, 5, 6, 7, 8, 9},
-        61: {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27},
+        33: set(range(1, 38)),
+        56: set(range(1, 11)),
+        61: set(range(1, 29)),
     }
     folios_usados: dict[int, set] = {t: set(FOLIOS_YA_ENVIADOS.get(t, set())) for t in cafs}
     folios_ref:    dict[str, int] = {}

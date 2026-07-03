@@ -118,11 +118,13 @@ def main():
             razon = caso.razon_referencia or "REFERENCIA"
             caso.items = [_ItemSet(nombre=razon[:80], cantidad=1, precio_unitario=0)]
 
-    # Folios ya enviados al SII (no reutilizar) — actualizar tras cada envío exitoso
+    # Folios ya enviados al SII (no reutilizar) — actualizar tras cada envío exitoso.
+    # Fuente de verdad: sets/pudu_78392059K/certificacion_final/RESUMEN_CERTIFICACION.md
+    # (última certificación real aceptada por el SII, 2026-05-18: T33 1-37, T56 1-10, T61 1-28).
     FOLIOS_YA_ENVIADOS = {
-        33: set(range(1, 25)),   # 1-24 usados
-        56: set(range(1, 7)),    # 1-6 usados
-        61: set(range(1, 19)),   # 1-18 usados
+        33: set(range(1, 38)),   # 1-37 usados
+        56: set(range(1, 11)),   # 1-10 usados
+        61: set(range(1, 29)),   # 1-28 usados
     }
 
     folios_usados = {t: set(FOLIOS_YA_ENVIADOS.get(t, set())) for t in cafs}

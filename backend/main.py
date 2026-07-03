@@ -172,7 +172,11 @@ async def certificar(
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     # Folio inicial por tipo. Pre-popula folios_usados con todos los previos
     # para saltarlos y arrancar desde el offset configurado.
-    FOLIO_START = {33: 21, 56: 6, 61: 16}
+    # Fuente de verdad: sets/pudu_78392059K/certificacion_final/RESUMEN_CERTIFICACION.md
+    # (última certificación real aceptada por el SII, 2026-05-18). Actualizar este
+    # valor manualmente después de cada envío real aceptado — no hay persistencia
+    # automática de folios todavía (ver auditoría: esto es solo para RUT 78392059-K).
+    FOLIO_START = {33: 38, 56: 11, 61: 29}
     folios_usados: dict[int, set] = {
         t: set(range(cafs[t].desde, FOLIO_START.get(t, cafs[t].desde)))
         for t in cafs
