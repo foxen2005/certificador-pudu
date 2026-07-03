@@ -17,7 +17,7 @@ from parser import parse_envio_dte, TIPO_NOMBRE, CEDIBLE_TIPOS
 from generator import generate_pdf
 from validator import validate_pdf
 from set_parser import parse_set_pruebas, CasoSet, ItemSet
-from builders.envio_dte import CAF, build_dte_xml, build_envio_dte
+from builders.envio_dte import CAF, build_dte_xml, build_envio_dte, aplicar_regla_corrige_texto
 from libro_builder import build_libro_ventas, build_libro_compras
 from timestamped_output import get_timestamped_output_dir
 
@@ -129,18 +129,11 @@ async def certificar(
         ref = caso_by_num.get(caso.referencia_caso)
         if not ref:
             continue
-        # NC tipo "Corrige Texto" (CodRef=2): NO copiar items con montos.
-        # El SII rechaza con REF-2-781 si una NC con CodRef=2 tiene MntTotal>0.
-        razon_upper = (caso.razon_referencia or "").upper()
-        es_corrige_texto = (
-            "CORRIGE" in razon_upper
-            or "GIRO" in razon_upper
-            or "RUBRO" in razon_upper
-        ) and "ANULA" not in razon_upper and "DEVOLUCION" not in razon_upper and "DEVOLUCIÓN" not in razon_upper
-        if es_corrige_texto:
-            # Fuerza item único con monto cero (cae al fallback final)
-            caso.items = []
-        elif not caso.items:
+        # NC tipo "Corrige Texto" (CodRef=2): NO debe tener montos — regla SII
+        # REF-2-781. Fuerza precio_unitario=0 en los items del caso.
+        if aplicar_regla_corrige_texto(caso):
+            continue
+        if not caso.items:
             # Sin items: copiar todos los items del caso referenciado
             caso.items = _copy.deepcopy(ref.items)
         else:
@@ -479,6 +472,13 @@ async def etapa2_simulacion(
     caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
                        items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
                        referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+
+    # Aplica la regla SII REF-2-781 (CodRef=2 "Corrige Texto" no debe tener
+    # montos) por si alguna razón de referencia de simulación llegara a caer
+    # en ese código — hoy las razones hardcodeadas arriba no lo hacen, pero
+    # esto evita que se rompa silenciosamente si se generaliza.
+    aplicar_regla_corrige_texto(caso_t61)
+    aplicar_regla_corrige_texto(caso_t56)
 
     folios_ref = {"SIM-1": f33, "SIM-2": f61}
     tipos_ref  = {"SIM-1": 33, "SIM-2": 61, "SIM-3": 56}

@@ -124,10 +124,11 @@ def validate_pdf(pdf_bytes: bytes, filename: str = "documento.pdf") -> Validatio
         "Presente" if has_resol else "No encontrada (ej: Resolución 0 de 2026)"
     ))
 
-    # 9. IVA con tasa explícita (solo facturas afectas T33/T46, no notas ni exentas)
+    # 9. IVA con tasa explícita (documentos afectos: Factura Electrónica T33/T46
+    #    y Notas de Crédito/Débito que no sean explícitamente exentas — las NC/ND
+    #    también son documentos afectos a IVA y deben mostrar la tasa)
     is_afecta = ("FACTURA ELECTRÓNICA" in text_upper
-                 and "EXENTA" not in text_upper
-                 and "NOTA DE" not in text_upper)
+                 and "EXENTA" not in text_upper)
     if is_afecta:
         has_tasa = bool(re.search(r'IVA\s*\(\s*\d+\s*%\s*\)', text, re.IGNORECASE))
         checks.append(Check(
@@ -146,13 +147,49 @@ def validate_pdf(pdf_bytes: bytes, filename: str = "documento.pdf") -> Validatio
             "Presente" if has_acuse else "Falta cuadro de Acuse de Recibo"
         ))
 
-    # 11. Presencia de imagen/objeto PDF417 en el PDF
-    # Verificamos que haya al menos una imagen embebida (el barcode)
-    images = page.get_images(full=True)
+    # 11. Presencia de imagen/objeto PDF417 en el PDF, con posición y tamaño
+    # dentro de lo exigido por el Manual SII para el Timbre Electrónico:
+    # mínimo 2cm del borde izquierdo, tamaño aprox. entre 2x5cm y 4x9cm.
+    # generator.py hoy genera el barcode con width_cm=5.0, height_cm=2.0
+    # (ver PDF417Barcode en generator.py) y lo posiciona heredando el
+    # margin=2.0*cm del documento — este check valida el rango, no el
+    # valor exacto, para detectar si alguien rompe margen/tamaño a futuro.
+    PT_PER_CM = 72 / 2.54
+    MARGIN_MIN_CM = 1.8  # tolerancia sobre los 2cm exigidos
+    # El timbre es rectangular (no cuadrado): una dimensión "corta" (~2 a 4cm)
+    # y una dimensión "larga" (~5 a 9cm), con tolerancia para no ser frágil.
+    SHORT_MIN_CM, SHORT_MAX_CM = 1.5, 4.5
+    LONG_MIN_CM, LONG_MAX_CM = 4.0, 9.5
+
+    images_info = page.get_image_info()
+    barcode_ok = False
+    if not images_info:
+        detail = "0 imagen(es) en el documento"
+    else:
+        # Tomamos la imagen de mayor área como candidata al Timbre/PDF417
+        im = max(images_info, key=lambda i: (i["bbox"][2] - i["bbox"][0]) * (i["bbox"][3] - i["bbox"][1]))
+        x0, y0, x1, y1 = im["bbox"]
+        w_cm = (x1 - x0) / PT_PER_CM
+        h_cm = (y1 - y0) / PT_PER_CM
+        left_cm = x0 / PT_PER_CM
+        short_dim, long_dim = min(w_cm, h_cm), max(w_cm, h_cm)
+
+        margin_ok = left_cm >= MARGIN_MIN_CM
+        size_ok = (SHORT_MIN_CM <= short_dim <= SHORT_MAX_CM
+                   and LONG_MIN_CM <= long_dim <= LONG_MAX_CM)
+        barcode_ok = margin_ok and size_ok
+
+        detail = (f"{len(images_info)} imagen(es); timbre candidato "
+                  f"{w_cm:.1f}x{h_cm:.1f}cm a {left_cm:.1f}cm del borde izquierdo")
+        if not margin_ok:
+            detail += " — margen izquierdo insuficiente (<1.8cm)"
+        if not size_ok:
+            detail += " — tamaño fuera de rango esperado (~2x5 a 4x9cm)"
+
     checks.append(Check(
-        "Imagen barcode embebida",
-        len(images) >= 1,
-        f"{len(images)} imagen(es) en el documento"
+        "Imagen barcode embebida (posición y tamaño Timbre)",
+        barcode_ok,
+        detail
     ))
 
     # 12. El texto NO debe ser todo imagen (RUT, folio deben ser texto)

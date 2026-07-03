@@ -140,7 +140,7 @@ def run():
     caso_by_num = {c.numero: c for c in sp.casos}
 
     # Resolver items para NC/ND antes de generar
-    from dte_builder import _cod_ref as _get_cod_ref
+    from builders.envio_dte import aplicar_regla_corrige_texto
     for caso in sp.casos:
         if not caso.referencia_caso:
             continue
@@ -149,14 +149,7 @@ def run():
             continue
 
         # CodRef=2 (Corrige Texto): el NC no debe tener montos — regla SII REF-2-781.
-        # Dejar items con precio=0 para que MntTotal=0.
-        if caso.razon_referencia and _get_cod_ref(caso.razon_referencia) == "2":
-            if not caso.items:
-                from set_parser import ItemSet as _ItemSet
-                caso.items = [_ItemSet(nombre=caso.razon_referencia[:80], cantidad=1, precio_unitario=0)]
-            else:
-                for item in caso.items:
-                    item.precio_unitario = 0.0
+        if aplicar_regla_corrige_texto(caso):
             continue
 
         if not caso.items:

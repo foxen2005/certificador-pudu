@@ -4,17 +4,14 @@ Firma el TED con la clave RSA del CAF.
 Firma el DTE con el certificado .pfx del representante.
 """
 import base64
-import hashlib
 from lxml import etree
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import pkcs12
 
 from set_parser import CasoSet, ItemSet
 
 NS_DTE = "http://www.sii.cl/SiiDte"
-NS_SIG = "http://www.w3.org/2000/09/xmldsig#"
 NSMAP = {None: NS_DTE}
 
 
@@ -206,11 +203,11 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
     # Receptor
     REC = etree.SubElement(ENC, "Receptor")
     etree.SubElement(REC, "RUTRecep").text = receptor["rut"]
-    etree.SubElement(REC, "RznSocRecep").text = receptor["razon_social"]
+    etree.SubElement(REC, "RznSocRecep").text = receptor["razon_social"][:100]
     if receptor.get("giro"):
-        etree.SubElement(REC, "GiroRecep").text = receptor["giro"]
+        etree.SubElement(REC, "GiroRecep").text = receptor["giro"][:40]
     if receptor.get("dir"):
-        etree.SubElement(REC, "DirRecep").text = receptor["dir"]
+        etree.SubElement(REC, "DirRecep").text = receptor["dir"][:70]
     if receptor.get("cmna"):
         etree.SubElement(REC, "CmnaRecep").text = receptor["cmna"]
 
@@ -284,7 +281,7 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
 
 
 def _cod_ref(razon: str) -> str:
-    r = razon.upper()
+    r = (razon or "").upper()
     if "ANULA" in r:
         return "1"
     if "CORRIGE" in r or "GIRO" in r or "RUBRO" in r:
@@ -292,71 +289,6 @@ def _cod_ref(razon: str) -> str:
     if "DEVOLUCION" in r or "DEVOLUCIÓN" in r:
         return "3"
     return "1"
-
-
-# ─── Firma XML del DTE con .pfx ───────────────────────────────────────────────
-
-def sign_dte_xml(dte_el: etree._Element, pfx_bytes: bytes, pfx_password: str) -> etree._Element:
-    """Firma el elemento <Documento> dentro del DTE usando XMLDsig con el certificado .pfx."""
-    from cryptography.x509 import Certificate
-    import copy
-
-    # Cargar .pfx
-    pwd = pfx_password.encode() if pfx_password else None
-    private_key, certificate, chain = pkcs12.load_key_and_certificates(
-        pfx_bytes, pwd, backend=default_backend()
-    )
-
-    doc_el = dte_el.find("Documento")
-    doc_id = doc_el.get("ID")
-
-    # Serializar Documento en C14N para hacer digest
-    doc_c14n = etree.tostring(doc_el, method="c14n")
-    digest = base64.b64encode(hashlib.sha1(doc_c14n).digest()).decode()
-
-    # Construir SignedInfo
-    SI = etree.Element(f"{{{NS_SIG}}}SignedInfo")
-    etree.SubElement(SI, f"{{{NS_SIG}}}CanonicalizationMethod",
-                     Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    etree.SubElement(SI, f"{{{NS_SIG}}}SignatureMethod",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1")
-    REF = etree.SubElement(SI, f"{{{NS_SIG}}}Reference", URI=f"#{doc_id}")
-    TRANS = etree.SubElement(REF, f"{{{NS_SIG}}}Transforms")
-    etree.SubElement(TRANS, f"{{{NS_SIG}}}Transform",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature")
-    etree.SubElement(REF, f"{{{NS_SIG}}}DigestMethod",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#sha1")
-    DV = etree.SubElement(REF, f"{{{NS_SIG}}}DigestValue")
-    DV.text = digest
-
-    # Firmar SignedInfo en C14N
-    si_c14n = etree.tostring(SI, method="c14n")
-    sig_value = private_key.sign(si_c14n, padding.PKCS1v15(), hashes.SHA1())
-    sig_b64 = base64.b64encode(sig_value).decode()
-
-    # Certificado en base64
-    cert_der = certificate.public_bytes(serialization.Encoding.DER)
-    cert_b64 = base64.b64encode(cert_der).decode()
-
-    # Construir Signature
-    SIG = etree.SubElement(dte_el, f"{{{NS_SIG}}}Signature")
-    SIG.append(SI)
-    SV = etree.SubElement(SIG, f"{{{NS_SIG}}}SignatureValue")
-    SV.text = sig_b64
-    KI = etree.SubElement(SIG, f"{{{NS_SIG}}}KeyInfo")
-    KV = etree.SubElement(KI, f"{{{NS_SIG}}}KeyValue")
-    RSA = etree.SubElement(KV, f"{{{NS_SIG}}}RSAKeyValue")
-    # Módulo y exponente
-    pub_key = certificate.public_key()
-    pub_nums = pub_key.public_key().public_numbers() if hasattr(pub_key, 'public_key') else pub_key.public_numbers()
-    n_bytes = pub_nums.n.to_bytes((pub_nums.n.bit_length() + 7) // 8, 'big')
-    e_bytes = pub_nums.e.to_bytes((pub_nums.e.bit_length() + 7) // 8, 'big')
-    etree.SubElement(RSA, f"{{{NS_SIG}}}Modulus").text = base64.b64encode(n_bytes).decode()
-    etree.SubElement(RSA, f"{{{NS_SIG}}}Exponent").text = base64.b64encode(e_bytes).decode()
-    X509 = etree.SubElement(KI, f"{{{NS_SIG}}}X509Data")
-    etree.SubElement(X509, f"{{{NS_SIG}}}X509Certificate").text = cert_b64
-
-    return dte_el
 
 
 # ─── Formateo XML (newlines en árbol, antes de C14N) ─────────────────────────
@@ -370,35 +302,6 @@ def _add_newlines(el: etree._Element) -> None:
         for child in el:
             child.tail = "\n"
             _add_newlines(child)
-
-
-def _c14n_for_sii(el: etree._Element) -> bytes:
-    """C14N compatible con la verificación del SII (Java spec-compliant).
-
-    Aplica dos fixes a la salida de lxml etree.tostring(..., method="c14n"):
-      1. ``xmlns=""`` en elementos a profundidad ≥2 → bug lxml subtree C14N.
-      2. ``xmlns:xsi="..."`` heredado del root pero NO visibly utilized en el
-         subtree → bug lxml inclusive C14N (debería excluirse por spec).
-    Sin estos fixes, las firmas no validan en el SII (DTE-3-505 / firma libro).
-    """
-    c14n = etree.tostring(el, method="c14n")
-    c14n = c14n.replace(b' xmlns=""', b'')
-    c14n = c14n.replace(
-        b' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"', b''
-    )
-    return c14n
-
-
-def _wrap_base64(el: etree._Element, width: int = 64) -> None:
-    """Corta en líneas de 'width' chars el texto de hojas largas (base64).
-    Solo afecta elementos hoja (sin hijos). Debe llamarse ANTES del C14N
-    que cubre ese elemento para que digest y serialización coincidan."""
-    for child in el.iter():
-        if child.text and len(child) == 0:
-            raw = child.text.replace("\n", "").replace(" ", "")
-            if len(raw) > width:
-                child.text = "\n" + "\n".join(raw[i:i+width]
-                                              for i in range(0, len(raw), width)) + "\n"
 
 
 # ─── Construir EnvioDTE SIN firmas (para firmar con Node.js/signer.js) ────────
@@ -437,163 +340,6 @@ def build_unsigned_envio_dte(dtes: list[etree._Element], emisor_data: dict,
         SET.append(dte)
 
     _add_newlines(ROOT)
-    xml_bytes = etree.tostring(ROOT, xml_declaration=True, encoding="ISO-8859-1")
-    return xml_bytes.replace(
-        b"<?xml version='1.0' encoding='ISO-8859-1'?>",
-        b'<?xml version="1.0" encoding="ISO-8859-1"?>'
-    )
-
-
-# ─── Construir EnvioDTE completo ──────────────────────────────────────────────
-
-def build_envio_dte(dtes: list[etree._Element], emisor_data: dict,
-                    pfx_bytes: bytes, pfx_password: str,
-                    timestamp: str, rut_receptor_sii: str = "60803000-K") -> bytes:
-    """Empaqueta todos los DTEs en un EnvioDTE y lo firma con el .pfx."""
-
-    ROOT = etree.Element("EnvioDTE",
-                         xmlns="http://www.sii.cl/SiiDte",
-                         attrib={
-                             "{http://www.w3.org/2001/XMLSchema-instance}schemaLocation":
-                                 "http://www.sii.cl/SiiDte EnvioDTE_v10.xsd",
-                             "version": "1.0"
-                         })
-
-    SET = etree.SubElement(ROOT, "SetDTE", ID="LibreDTE_SetDoc")
-    CAR = etree.SubElement(SET, "Caratula", version="1.0")
-    etree.SubElement(CAR, "RutEmisor").text = emisor_data["rut"]
-    etree.SubElement(CAR, "RutEnvia").text = emisor_data["rut_envia"]
-    etree.SubElement(CAR, "RutReceptor").text = rut_receptor_sii
-    etree.SubElement(CAR, "FchResol").text = emisor_data.get("fch_resol", timestamp[:10])
-    etree.SubElement(CAR, "NroResol").text = emisor_data.get("nro_resol", "0")
-    etree.SubElement(CAR, "TmstFirmaEnv").text = timestamp
-
-    from collections import Counter
-    conteo = Counter()
-    for dte in dtes:
-        tipo = dte.find("Documento/Encabezado/IdDoc/TipoDTE").text
-        conteo[tipo] += 1
-    for tipo, cantidad in sorted(conteo.items()):
-        SUB = etree.SubElement(CAR, "SubTotDTE")
-        etree.SubElement(SUB, "TpoDTE").text = tipo
-        etree.SubElement(SUB, "NroDTE").text = str(cantidad)
-
-    for dte in dtes:
-        SET.append(dte)
-
-    # ── PASO 1: normalizar namespaces (serialize + re-parse) ─────────────────
-    # Los DTEs se crean sin namespace explícito; el re-parse les asigna NS_DTE
-    # heredado del root. IMPORTANTE: este paso se hace ANTES de firmar los DTEs.
-    _add_newlines(ROOT)
-    _intermediate = etree.tostring(ROOT)
-    ROOT = etree.fromstring(_intermediate)
-    SET = ROOT.find(f"{{{NS_DTE}}}SetDTE")
-
-    # ── PASO 2: cargar clave una sola vez ────────────────────────────────────
-    pwd_bytes = pfx_password.encode() if pfx_password else None
-    private_key, certificate, _ = pkcs12.load_key_and_certificates(
-        pfx_bytes, pwd_bytes, backend=default_backend()
-    )
-    cert_der_dte = certificate.public_bytes(serialization.Encoding.DER)
-    cert_b64_dte = base64.b64encode(cert_der_dte).decode()
-    pub_nums_dte = certificate.public_key().public_numbers()
-    n_bytes_dte = pub_nums_dte.n.to_bytes((pub_nums_dte.n.bit_length() + 7) // 8, 'big')
-    e_bytes_dte = pub_nums_dte.e.to_bytes((pub_nums_dte.e.bit_length() + 7) // 8, 'big')
-
-    # ── PASO 3: firmar cada Documento ────────────────────────────────────────
-    # Mismo patrón que libro_builder._sign_libro (que funcionó con SII):
-    #   1. Construir Signature COMPLETO dentro del árbol (no standalone)
-    #   2. Formatear (_add_newlines + _wrap_base64) ANTES de computar si_c14n
-    #   3. Calcular C14N del SI ya embebido → firmar → asignar SignatureValue
-    # Esto asegura que el C14N que SII recompute al verificar coincida con el
-    # que firmamos, porque el XML submitted refleja el árbol exacto que firmamos.
-    for dte_el in SET.findall(f"{{{NS_DTE}}}DTE"):
-        doc_el = dte_el.find(f"{{{NS_DTE}}}Documento")
-        doc_id = doc_el.get("ID")
-
-        # 1. DigestValue del Documento (C14N spec-compliant para SII)
-        doc_c14n = _c14n_for_sii(doc_el)
-        digest_doc = base64.b64encode(hashlib.sha1(doc_c14n).digest()).decode()
-
-        # 2. Construir Signature en el árbol (nsmap={None: NS_SIG} → default xmlns
-        #    de firma, sin prefijo ns0:)
-        SIG_dte = etree.SubElement(dte_el, f"{{{NS_SIG}}}Signature",
-                                   nsmap={None: NS_SIG})
-        SIG_dte.tail = "\n"
-        SI_dte = etree.SubElement(SIG_dte, f"{{{NS_SIG}}}SignedInfo")
-        etree.SubElement(SI_dte, f"{{{NS_SIG}}}CanonicalizationMethod",
-                         Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-        etree.SubElement(SI_dte, f"{{{NS_SIG}}}SignatureMethod",
-                         Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1")
-        REF_dte = etree.SubElement(SI_dte, f"{{{NS_SIG}}}Reference", URI=f"#{doc_id}")
-        TRANS_dte = etree.SubElement(REF_dte, f"{{{NS_SIG}}}Transforms")
-        etree.SubElement(TRANS_dte, f"{{{NS_SIG}}}Transform",
-                         Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature")
-        etree.SubElement(REF_dte, f"{{{NS_SIG}}}DigestMethod",
-                         Algorithm="http://www.w3.org/2000/09/xmldsig#sha1")
-        etree.SubElement(REF_dte, f"{{{NS_SIG}}}DigestValue").text = digest_doc
-        SV_dte = etree.SubElement(SIG_dte, f"{{{NS_SIG}}}SignatureValue")
-        KI_dte = etree.SubElement(SIG_dte, f"{{{NS_SIG}}}KeyInfo")
-        KV_dte = etree.SubElement(KI_dte, f"{{{NS_SIG}}}KeyValue")
-        RSA_dte = etree.SubElement(KV_dte, f"{{{NS_SIG}}}RSAKeyValue")
-        etree.SubElement(RSA_dte, f"{{{NS_SIG}}}Modulus").text = base64.b64encode(n_bytes_dte).decode()
-        etree.SubElement(RSA_dte, f"{{{NS_SIG}}}Exponent").text = base64.b64encode(e_bytes_dte).decode()
-        X509_dte = etree.SubElement(KI_dte, f"{{{NS_SIG}}}X509Data")
-        etree.SubElement(X509_dte, f"{{{NS_SIG}}}X509Certificate").text = cert_b64_dte
-
-        # 3. Formatear (newlines + wrap base64) ANTES de C14N del SI
-        #    El XML serializado tendrá \n entre elementos → C14N de SI los incluye.
-        #    Si firmamos sin \n pero el XML los tiene, SII recomputa C14N con \n
-        #    y no coincide → DTE-3-505.
-        _add_newlines(SIG_dte)
-        _wrap_base64(SIG_dte)
-
-        # 4. C14N del SI embebido → firmar → asignar SignatureValue
-        si_dte_c14n = _c14n_for_sii(SI_dte)
-        sig_val_dte = private_key.sign(si_dte_c14n, padding.PKCS1v15(), hashes.SHA1())
-        SV_dte.text = base64.b64encode(sig_val_dte).decode()
-
-    # ── PASO 4: firmar SetDTE (C14N incluye DTEs con sus Signatures completas) ─
-    set_c14n = _c14n_for_sii(SET)
-    digest_set = base64.b64encode(hashlib.sha1(set_c14n).digest()).decode()
-
-    # 1. Construir Signature del EnvioDTE en el árbol (mismo patrón nsmap)
-    SIG = etree.SubElement(ROOT, f"{{{NS_SIG}}}Signature",
-                           nsmap={None: NS_SIG})
-    SIG.tail = "\n"
-    SI = etree.SubElement(SIG, f"{{{NS_SIG}}}SignedInfo")
-    etree.SubElement(SI, f"{{{NS_SIG}}}CanonicalizationMethod",
-                     Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
-    etree.SubElement(SI, f"{{{NS_SIG}}}SignatureMethod",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1")
-    REF = etree.SubElement(SI, f"{{{NS_SIG}}}Reference", URI="#LibreDTE_SetDoc")
-    TRANS = etree.SubElement(REF, f"{{{NS_SIG}}}Transforms")
-    etree.SubElement(TRANS, f"{{{NS_SIG}}}Transform",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature")
-    etree.SubElement(REF, f"{{{NS_SIG}}}DigestMethod",
-                     Algorithm="http://www.w3.org/2000/09/xmldsig#sha1")
-    etree.SubElement(REF, f"{{{NS_SIG}}}DigestValue").text = digest_set
-    SV = etree.SubElement(SIG, f"{{{NS_SIG}}}SignatureValue")
-    KI = etree.SubElement(SIG, f"{{{NS_SIG}}}KeyInfo")
-    KV = etree.SubElement(KI, f"{{{NS_SIG}}}KeyValue")
-    RSA = etree.SubElement(KV, f"{{{NS_SIG}}}RSAKeyValue")
-    pub_nums = certificate.public_key().public_numbers()
-    n_b = pub_nums.n.to_bytes((pub_nums.n.bit_length() + 7) // 8, 'big')
-    e_b = pub_nums.e.to_bytes((pub_nums.e.bit_length() + 7) // 8, 'big')
-    etree.SubElement(RSA, f"{{{NS_SIG}}}Modulus").text = base64.b64encode(n_b).decode()
-    etree.SubElement(RSA, f"{{{NS_SIG}}}Exponent").text = base64.b64encode(e_b).decode()
-    X509 = etree.SubElement(KI, f"{{{NS_SIG}}}X509Data")
-    etree.SubElement(X509, f"{{{NS_SIG}}}X509Certificate").text = cert_b64_dte
-
-    # 2. Agregar \n y wrappear base64 ANTES de calcular C14N del SI
-    _add_newlines(SIG)
-    _wrap_base64(SIG)
-
-    # 3. Calcular C14N del SI ya embebido → firmar → asignar
-    si_c14n = _c14n_for_sii(SI)
-    sig_bytes = private_key.sign(si_c14n, padding.PKCS1v15(), hashes.SHA1())
-    SV.text = base64.b64encode(sig_bytes).decode()
-
     xml_bytes = etree.tostring(ROOT, xml_declaration=True, encoding="ISO-8859-1")
     return xml_bytes.replace(
         b"<?xml version='1.0' encoding='ISO-8859-1'?>",

@@ -158,6 +158,36 @@ def _cod_ref(razon: str) -> str:
     return "1"
 
 
+def aplicar_regla_corrige_texto(caso: CasoSet) -> bool:
+    """Aplica la regla SII REF-2-781 a un caso de NC/ND.
+
+    Una Nota de Crédito/Débito cuya razón de referencia resuelve a
+    CodRef=2 ("Corrige Texto" / "Corrige Giro del Receptor" / similar, ver
+    `_cod_ref`) NO debe llevar montos: el SII la rechaza con
+    "REF-2-781 Modifica Texto no debe tener montos" si MntTotal > 0.
+
+    Si la regla aplica, fuerza `precio_unitario=0` en todos los items del
+    caso (creando un item genérico con la razón de referencia como nombre
+    si el caso no traía ninguno) y retorna True — en ese caso el llamador
+    NO debe aplicar la resolución normal de items (copiar/heredar montos
+    del caso referenciado), porque el resultado siempre debe quedar en
+    monto cero.
+
+    Retorna False si la regla no aplica (CodRef != 2 o sin razón de
+    referencia) y el caso debe seguir el flujo normal de resolución.
+    """
+    if not caso.razon_referencia:
+        return False
+    if _cod_ref(caso.razon_referencia) != "2":
+        return False
+    if not caso.items:
+        caso.items = [ItemSet(nombre=caso.razon_referencia[:80], cantidad=1, precio_unitario=0)]
+    else:
+        for item in caso.items:
+            item.precio_unitario = 0.0
+    return True
+
+
 # ─── DTE individual (Documento + TED, sin firma XMLDsig) ─────────────────────
 
 def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
@@ -211,11 +241,11 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
     # Receptor
     REC = etree.SubElement(ENC, "Receptor")
     etree.SubElement(REC, "RUTRecep").text = receptor["rut"]
-    etree.SubElement(REC, "RznSocRecep").text = receptor["razon_social"]
+    etree.SubElement(REC, "RznSocRecep").text = receptor["razon_social"][:100]
     if receptor.get("giro"):
-        etree.SubElement(REC, "GiroRecep").text = receptor["giro"]
+        etree.SubElement(REC, "GiroRecep").text = receptor["giro"][:40]
     if receptor.get("dir"):
-        etree.SubElement(REC, "DirRecep").text = receptor["dir"]
+        etree.SubElement(REC, "DirRecep").text = receptor["dir"][:70]
     if receptor.get("cmna"):
         etree.SubElement(REC, "CmnaRecep").text = receptor["cmna"]
 
