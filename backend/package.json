@@ -1,0 +1,9 @@
+{
+  "name": "certificador-pudu-backend-node-deps",
+  "private": true,
+  "description": "Dependencias Node.js para builders/pudu_sign.cjs (firma vendorizada, sin depender de SII_pudu_Server).",
+  "dependencies": {
+    "node-forge": "^1.3.1",
+    "xml-crypto": "^2.1.5"
+  }
+}

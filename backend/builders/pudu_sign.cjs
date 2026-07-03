@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Firma un XML invocando el signer.js del SII_pudu_Server (xml-crypto).
+ * Firma un XML usando xml-crypto (copia vendorizada de signer.js, sin
+ * depender de SII_pudu_Server en runtime — ver builders/vendor/signer.js).
  *
  * Uso (vía stdin/stdout):
  *   node pudu_sign.js < input.json > signed.xml
@@ -25,18 +26,15 @@
  * Output: el XML firmado (stdout). Errores → stderr + exit code != 0.
  */
 const fs = require('fs');
-const path = require('path');
 
 // Redirigir console.log → stderr. signer.js llama console.log al parsear el
 // cert; si va a stdout contamina la salida (donde devolvemos el XML firmado).
 console.log = (...args) => process.stderr.write(args.join(' ') + '\n');
 
-const PUDU_SERVER = path.resolve(__dirname, '../../../SII_pudu_Server');
-
-// Cargar signer.js del SII_pudu_Server (usa sus node_modules)
-const { parseCertificate, signInPlace } = require(
-  path.join(PUDU_SERVER, 'src/signer.js')
-);
+// Copia vendorizada — Certificador Pudu no depende de SII_pudu_Server en runtime
+// (ver builders/vendor/signer.js). El Cloud Run de certificador-sii solo empaqueta
+// esta carpeta backend/, así que una referencia a la carpeta vecina no existiría ahí.
+const { parseCertificate, signInPlace } = require('./vendor/signer.js');
 
 function readStdin() {
   return new Promise((resolve, reject) => {
