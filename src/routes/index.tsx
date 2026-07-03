@@ -138,10 +138,21 @@ function SetupStep({
 
   const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61);
 
-  function handleGuardarYContinuar() {
+  async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
     if (clave === null) return; // canceló
-    if (clave !== "asdqwe123") {
+    try {
+      const res = await fetch("/api/check-clave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clave }),
+      });
+      const data = (await res.json()) as { ok?: boolean };
+      if (!data.ok) {
+        setClaveError(true);
+        return;
+      }
+    } catch {
       setClaveError(true);
       return;
     }
