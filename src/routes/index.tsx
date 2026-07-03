@@ -134,8 +134,20 @@ function SetupStep({
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
+  const [claveError, setClaveError] = useState(false);
 
   const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61);
+
+  function handleGuardarYContinuar() {
+    const clave = window.prompt("Ingresa la clave para continuar:");
+    if (clave === null) return; // canceló
+    if (clave !== "asdqwe123") {
+      setClaveError(true);
+      return;
+    }
+    setClaveError(false);
+    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } });
+  }
 
   return (
     <div className="space-y-6">
@@ -194,13 +206,12 @@ function SetupStep({
         </div>
       </div>
 
-      <Button
-        size="lg"
-        disabled={!ready}
-        onClick={() => onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } })}
-      >
+      <Button size="lg" disabled={!ready} onClick={handleGuardarYContinuar}>
         Guardar y continuar →
       </Button>
+      {claveError && (
+        <p className="text-sm text-destructive">Clave incorrecta.</p>
+      )}
     </div>
   );
 }
