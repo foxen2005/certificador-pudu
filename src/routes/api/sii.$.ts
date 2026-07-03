@@ -134,18 +134,25 @@ async function diagnose(request: Request): Promise<Response> {
 
   if (saKeyB64) {
     try {
-      const sa = JSON.parse(atob(saKeyB64)) as { client_email?: string };
+      const sa = JSON.parse(atob(saKeyB64)) as ServiceAccountKey;
       result.saClientEmail = sa.client_email ?? null;
+      result.privateKeyLooksLikePem = sa.private_key?.startsWith("-----BEGIN PRIVATE KEY-----") ?? false;
+      result.privateKeyLength = sa.private_key?.length ?? 0;
+      result.privateKeyHasLiteralBackslashN = sa.private_key?.includes("\\n") ?? false;
+
+      // Llamar getGCPIdentityToken directo (no resolveAuthToken) para no perder el error real.
+      try {
+        const audience = backend.split("/").slice(0, 3).join("/");
+        result.audience = audience;
+        const token = await getGCPIdentityToken(sa, audience);
+        result.tokenObtained = !!token;
+      } catch (e) {
+        result.tokenObtained = false;
+        result.tokenError = e instanceof Error ? e.message : String(e);
+      }
     } catch (e) {
       result.saParseError = e instanceof Error ? e.message : String(e);
     }
-  }
-
-  try {
-    const token = await resolveAuthToken(request, backend);
-    result.tokenObtained = !!token;
-  } catch (e) {
-    result.tokenError = e instanceof Error ? e.message : String(e);
   }
 
   return new Response(JSON.stringify(result, null, 2), {
