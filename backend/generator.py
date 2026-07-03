@@ -112,7 +112,10 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
 
     # Tamaño: oficio = 21.59 x 33.02 cm, usamos A4 (~21.0 x 29.7 cm)
     page_w, page_h = A4
-    margin = 1.0 * cm
+    # Manual SII (muestras impresas): el Timbre Electrónico debe ir a una distancia
+    # mínima de 2cm del borde izquierdo. usable_w se deriva de este margen, así que
+    # subirlo reubica también el timbre (que se agrega al story más abajo).
+    margin = 2.0 * cm
 
     doc = SimpleDocTemplate(
         buf,

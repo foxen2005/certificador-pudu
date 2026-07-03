@@ -743,6 +743,19 @@ function CertWizard() {
               <p className="font-semibold text-foreground mb-1">¿Qué es la certificación?</p>
               <p>El SII te pide demostrar que tu software puede emitir DTEs válidos antes de operar en producción. Son 4 etapas, cada una con un Nº de Atención.</p>
             </div>
+
+            <div className="mt-6 rounded-xl border border-[#5D17EB]/10 bg-[#5D17EB]/5 p-3 text-center">
+              <img src="/pudu-logo.png" alt="PUDU Tecnología" className="mx-auto h-12 w-12 object-contain" />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Si necesitan trabajar con el certificador, deben comunicarse primero.
+              </p>
+              <a
+                href="mailto:contacto@pudutecnologia.cl"
+                className="mt-3 inline-block rounded-lg bg-[#5D17EB] px-4 py-2 text-xs font-bold text-white shadow-lg shadow-[#5D17EB]/20 transition-transform hover:scale-[1.02] hover:bg-[#5D17EB]/90"
+              >
+                Contactar a PUDU
+              </a>
+            </div>
           </div>
         </aside>
 
