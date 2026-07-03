@@ -109,57 +109,6 @@ async function resolveAuthToken(request: Request, backendUrl: string): Promise<s
   return staticToken || null;
 }
 
-// DEBUG TEMPORAL — diagnosticar por qué /api/sii/* devuelve 403 en producción.
-// Quitar este bloque (y su uso en GET más abajo) una vez resuelto.
-async function diagnose(request: Request): Promise<Response> {
-  const backend = getSiiBackendUrl().replace(/\/$/, "");
-  const g = globalThis as Record<string, unknown>;
-  const cfEnv = g["env"] as Record<string, string> | undefined;
-  const procEnv = (g["process"] as { env?: Record<string, string> } | undefined)?.env;
-
-  const saKeyB64 = readSecret("GCP_SA_KEY_JSON");
-  const staticToken = readSecret("SII_BACKEND_TOKEN");
-
-  const result: Record<string, unknown> = {
-    backend,
-    foundVia: {
-      "globalThis.env": !!cfEnv?.["GCP_SA_KEY_JSON"],
-      "globalThis[key]": typeof g["GCP_SA_KEY_JSON"] === "string",
-      "process.env": !!procEnv?.["GCP_SA_KEY_JSON"],
-    },
-    gcpSaKeyFound: !!saKeyB64,
-    gcpSaKeyLength: saKeyB64.length,
-    staticTokenFound: !!staticToken,
-  };
-
-  if (saKeyB64) {
-    try {
-      const sa = JSON.parse(atob(saKeyB64)) as ServiceAccountKey;
-      result.saClientEmail = sa.client_email ?? null;
-      result.privateKeyLooksLikePem = sa.private_key?.startsWith("-----BEGIN PRIVATE KEY-----") ?? false;
-      result.privateKeyLength = sa.private_key?.length ?? 0;
-      result.privateKeyHasLiteralBackslashN = sa.private_key?.includes("\\n") ?? false;
-
-      // Llamar getGCPIdentityToken directo (no resolveAuthToken) para no perder el error real.
-      try {
-        const audience = backend.split("/").slice(0, 3).join("/");
-        result.audience = audience;
-        const token = await getGCPIdentityToken(sa, audience);
-        result.tokenObtained = !!token;
-      } catch (e) {
-        result.tokenObtained = false;
-        result.tokenError = e instanceof Error ? e.message : String(e);
-      }
-    } catch (e) {
-      result.saParseError = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  return new Response(JSON.stringify(result, null, 2), {
-    headers: { "Content-Type": "application/json", ...corsHeaders },
-  });
-}
-
 async function proxy(request: Request, splat: string): Promise<Response> {
   const backend = getSiiBackendUrl().replace(/\/$/, "");
   const target = `${backend}/${splat}`;
@@ -202,13 +151,7 @@ export const Route = createFileRoute("/api/sii/$")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: corsHeaders }),
-      GET: async ({ request, params }) => {
-        const url = new URL(request.url);
-        if (url.searchParams.get("felixdiag") === "pudu2026tmp") {
-          return diagnose(request);
-        }
-        return proxy(request, params._splat ?? "");
-      },
+      GET: async ({ request, params }) => proxy(request, params._splat ?? ""),
       POST: async ({ request, params }) => proxy(request, params._splat ?? ""),
     },
   },
