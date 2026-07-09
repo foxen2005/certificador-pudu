@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiCheckClaveRouteImport } from './routes/api/check-clave'
 import { Route as ApiSiiSplatRouteImport } from './routes/api/sii.$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCheckClaveRoute = ApiCheckClaveRouteImport.update({
+  id: '/api/check-clave',
+  path: '/api/check-clave',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSiiSplatRoute = ApiSiiSplatRouteImport.update({
@@ -25,27 +31,31 @@ const ApiSiiSplatRoute = ApiSiiSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/sii/$'
+  fullPaths: '/' | '/api/check-clave' | '/api/sii/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/sii/$'
-  id: '__root__' | '/' | '/api/sii/$'
+  to: '/' | '/api/check-clave' | '/api/sii/$'
+  id: '__root__' | '/' | '/api/check-clave' | '/api/sii/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiCheckClaveRoute: typeof ApiCheckClaveRoute
   ApiSiiSplatRoute: typeof ApiSiiSplatRoute
 }
 
@@ -56,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/check-clave': {
+      id: '/api/check-clave'
+      path: '/api/check-clave'
+      fullPath: '/api/check-clave'
+      preLoaderRoute: typeof ApiCheckClaveRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/sii/$': {
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiCheckClaveRoute: ApiCheckClaveRoute,
   ApiSiiSplatRoute: ApiSiiSplatRoute,
 }
 export const routeTree = rootRouteImport
