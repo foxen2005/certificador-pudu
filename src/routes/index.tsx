@@ -135,9 +135,10 @@ function SetupStep({
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
+  const [caf46, setCaf46] = useState<File | null>(null);
   const [claveError, setClaveError] = useState(false);
 
-  const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61);
+  const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61 || caf46);
 
   async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
@@ -158,7 +159,7 @@ function SetupStep({
       return;
     }
     setClaveError(false);
-    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } });
+    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(caf46 && { "46": caf46 }) } });
   }
 
   return (
@@ -198,7 +199,7 @@ function SetupStep({
             <div>
               <strong className="text-foreground">CAF (Código de Autorización de Folios)</strong> — Solicítalo en
               <em> maullin.sii.cl → Boletas y Documentos → Solicitar Folios</em>. Pide un CAF por
-              cada tipo de DTE que quieras certificar (T33, T56, T61).
+              cada tipo de DTE que quieras certificar (T33, T56, T61, T46).
             </div>
           </div>
         </CardContent>
@@ -215,6 +216,7 @@ function SetupStep({
           <UploadBox label="CAF Factura Electrónica" hint="dte33d1a100.xml" icon="🧾" accept=".xml" optionalTag="T33" file={caf33} onChange={setCaf33} />
           <UploadBox label="CAF Nota de Crédito" hint="dte61d1a100.xml" icon="📉" accept=".xml" optionalTag="T61" file={caf61} onChange={setCaf61} />
           <UploadBox label="CAF Nota de Débito" hint="dte56d1a100.xml" icon="📈" accept=".xml" optionalTag="T56" file={caf56} onChange={setCaf56} />
+          <UploadBox label="CAF Factura de Compra" hint="dte46d1a100.xml" icon="🛒" accept=".xml" optionalTag="T46" file={caf46} onChange={setCaf46} />
         </div>
       </div>
 
@@ -264,6 +266,7 @@ function Etapa1Step({
       if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
       if (nroCompras) fd.append("nro_atencion_compras", nroCompras);
@@ -400,6 +403,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
       const data = await postForm("/api/sii/etapa2", fd) as BatchResult;
       setResult(data);
       onDone();

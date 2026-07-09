@@ -123,6 +123,22 @@ async def certificar(
     # Resolver items para NC/ND: copiar del caso referenciado o resolver precios
     import copy as _copy
     caso_by_num = {c.numero: c for c in sp.casos}
+
+    # Retención total del IVA (cambio de sujeto): la lleva la Factura de Compra
+    # (T46) y, por herencia, toda NC/ND que referencie (transitivamente) un T46.
+    def _tiene_retencion(caso: CasoSet, _visto: set | None = None) -> bool:
+        if caso.tipo_doc == 46:
+            return True
+        _visto = _visto or set()
+        if not caso.referencia_caso or caso.referencia_caso in _visto:
+            return False
+        _visto.add(caso.referencia_caso)
+        ref = caso_by_num.get(caso.referencia_caso)
+        return _tiene_retencion(ref, _visto) if ref else False
+
+    for caso in sp.casos:
+        caso.con_retencion = _tiene_retencion(caso)
+
     for caso in sp.casos:
         if not caso.referencia_caso:
             continue

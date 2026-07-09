@@ -42,6 +42,8 @@ class Totales:
     monto_total: int
     descuento_global_pct: Optional[float] = None
     descuento_global_monto: Optional[int] = None
+    # Factura de Compra (T46): IVA retenido total (cambio de sujeto)
+    iva_retenido: Optional[int] = None
 
 
 @dataclass
@@ -181,6 +183,7 @@ def parse_envio_dte(xml_bytes: bytes) -> list[DTE]:
                 monto_total=_int(totales_el, "MntTotal") or 0,
                 descuento_global_pct=dscto_pct,
                 descuento_global_monto=dscto_monto,
+                iva_retenido=_int(totales_el, "ImptoReten", "MontoImp"),
             )
 
         # TED: usar el bloque crudo ISO-8859-1 del XML (preserva firmas y encoding)

@@ -297,6 +297,10 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
             if t.iva is not None:
                 tasa = f" ({int(t.tasa_iva)}%)" if t.tasa_iva else ""
                 tot_rows.append([f"IVA{tasa}:", fmt_money(t.iva)])
+            # Factura de Compra (T46): IVA retenido total (cambio de sujeto).
+            # Se resta del total: el proveedor recibe solo el neto.
+            if t.iva_retenido:
+                tot_rows.append(["IVA Retenido (100%):", f"-{fmt_money(t.iva_retenido)}"])
             tot_rows.append(["Monto Total:", fmt_money(t.monto_total)])
 
         tot_table = Table(tot_rows, colWidths=[usable_w - 3.5*cm, 3.5*cm])
