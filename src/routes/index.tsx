@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { UploadBox } from "@/components/sii/UploadBox";
 import { PortalGuide } from "@/components/sii/PortalGuide";
 import { Results, type BatchResult } from "@/components/sii/Results";
+import { VersionBadge } from "@/components/VersionBadge";
 
 export const Route = createFileRoute("/")({
   head: () => ({
