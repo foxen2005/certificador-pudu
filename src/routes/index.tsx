@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { UploadBox } from "@/components/sii/UploadBox";
 import { PortalGuide } from "@/components/sii/PortalGuide";
 import { Results, type BatchResult } from "@/components/sii/Results";
+import { VersionBadge } from "@/components/VersionBadge";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -728,7 +729,10 @@ function CertWizard() {
             <h1 className="text-lg font-bold text-foreground">Certificador DTE</h1>
             <p className="text-xs text-muted-foreground">Guía paso a paso — Certificación SII Chile</p>
           </div>
-          <Badge variant="outline" className="ml-auto">Ambiente Certificación</Badge>
+          <div className="ml-auto flex items-center gap-2">
+            <VersionBadge />
+            <Badge variant="outline">Ambiente Certificación</Badge>
+          </div>
         </div>
       </header>
 
