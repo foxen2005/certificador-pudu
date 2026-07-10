@@ -60,6 +60,11 @@ async def certificar(
     caf_61: UploadFile = File(None, description="CAF Nota de Crédito (T61)"),
     caf_52: UploadFile = File(None, description="CAF Guía de Despacho (T52)"),
     caf_46: UploadFile = File(None, description="CAF Factura de Compra (T46)"),
+    folio_inicial_33: int = Form(None, description="Folio inicial T33 (opcional)"),
+    folio_inicial_56: int = Form(None, description="Folio inicial T56 (opcional)"),
+    folio_inicial_61: int = Form(None, description="Folio inicial T61 (opcional)"),
+    folio_inicial_52: int = Form(None, description="Folio inicial T52 (opcional)"),
+    folio_inicial_46: int = Form(None, description="Folio inicial T46 (opcional)"),
 ):
     """
     Flujo completo: recibe SIISetDePruebas + CAFs + certificado PFX,
@@ -186,6 +191,23 @@ async def certificar(
     # valor manualmente después de cada envío real aceptado — no hay persistencia
     # automática de folios todavía (ver auditoría: esto es solo para RUT 78392059-K).
     FOLIO_START = {33: 38, 56: 11, 61: 29}
+    # Override por request: permite fijar el folio inicial desde la interfaz
+    # (ej. cuando un folio ya se usó en un envío previo y hay que saltarlo).
+    _folio_overrides = {33: folio_inicial_33, 56: folio_inicial_56,
+                        61: folio_inicial_61, 52: folio_inicial_52,
+                        46: folio_inicial_46}
+    for _t, _v in _folio_overrides.items():
+        if _v is not None:
+            FOLIO_START[_t] = _v
+    # Validar que el folio inicial esté dentro del rango autorizado del CAF
+    for _t in cafs:
+        _start = FOLIO_START.get(_t, cafs[_t].desde)
+        if not (cafs[_t].desde <= _start <= cafs[_t].hasta):
+            raise HTTPException(
+                422,
+                f"Folio inicial {_start} para T{_t} fuera del rango autorizado "
+                f"del CAF ({cafs[_t].desde}-{cafs[_t].hasta})."
+            )
     folios_usados: dict[int, set] = {
         t: set(range(cafs[t].desde, FOLIO_START.get(t, cafs[t].desde)))
         for t in cafs
