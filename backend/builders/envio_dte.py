@@ -277,14 +277,15 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
         etree.SubElement(TOTS, "TasaIVA").text = "19"
         etree.SubElement(TOTS, "IVA").text = str(tots["iva"])
     # Factura de Compra (T46) y NC/ND de su cadena: retención total del IVA.
-    # ImptoReten (TipoImp=15 = IVA Retenido Total) + IVANoRet=0. El IVA queda
-    # totalmente retenido, por lo que MntTotal = neto (calc_totales ya lo ajustó).
+    # ImptoReten (TipoImp=15 = IVA Retenido Total). El IVA queda totalmente
+    # retenido, por lo que MntTotal = neto (calc_totales ya lo ajustó).
+    # NO se emite IVANoRet: en retención total vale 0 y el schema DTE_v10
+    # (MntImpType, minInclusive=1) rechaza el valor 0.
     if con_retencion and tots["neto"]:
         IMPRET = etree.SubElement(TOTS, "ImptoReten")
         etree.SubElement(IMPRET, "TipoImp").text = "15"
         etree.SubElement(IMPRET, "TasaImp").text = "19.00"
         etree.SubElement(IMPRET, "MontoImp").text = str(tots["iva_ret"])
-        etree.SubElement(TOTS, "IVANoRet").text = "0"
     etree.SubElement(TOTS, "MntTotal").text = str(tots["total"])
 
     # Detalles (IndExe va ANTES de NmbItem por orden schema)
