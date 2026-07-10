@@ -456,17 +456,20 @@ async def etapa2_simulacion(
     caf_33: UploadFile = File(..., description="CAF Factura T33"),
     caf_61: UploadFile = File(..., description="CAF Nota de Crédito T61"),
     caf_56: UploadFile = File(..., description="CAF Nota de Débito T56"),
+    caf_46: UploadFile = File(None, description="CAF Factura de Compra T46 (opcional)"),
     folio_33: int = Form(None, description="Folio T33 (opcional, usa el siguiente disponible)"),
     folio_61: int = Form(None, description="Folio T61 (opcional)"),
     folio_56: int = Form(None, description="Folio T56 (opcional)"),
+    folio_46: int = Form(None, description="Folio T46 (opcional)"),
     producto: str = Form("Servicio tecnológico", description="Nombre del producto/servicio"),
     precio:   int = Form(35000, description="Precio unitario (sin IVA)"),
 ):
     """
-    Etapa 2 — Genera EnvioDTE de Simulación con 3 DTEs:
+    Etapa 2 — Genera EnvioDTE de Simulación con 3 DTEs (+1 opcional):
       T33 — Factura (2 unidades)
       T61 — NC devolución parcial (1 unidad, ref T33)
       T56 — ND anula NC (1 unidad, ref T61)
+      T46 — Factura de Compra con retención total del IVA (si se sube el CAF T46)
     """
     dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
     dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
@@ -494,10 +497,20 @@ async def etapa2_simulacion(
     except Exception as e:
         raise HTTPException(422, f"Error leyendo CAF: {e}")
 
+    # CAF T46 opcional: si se sube, se agrega una Factura de Compra a la simulación
+    caf46 = None
+    raw46 = await caf_46.read() if caf_46 is not None else None
+    if raw46:
+        try:
+            caf46 = CAF(raw46)
+        except Exception as e:
+            raise HTTPException(422, f"Error leyendo CAF T46: {e}")
+
     # Folios: usa el indicado o el siguiente disponible desde el mínimo del CAF
     f33 = folio_33 or caf33.desde
     f61 = folio_61 or caf61.desde
     f56 = folio_56 or caf56.desde
+    f46 = (folio_46 or caf46.desde) if caf46 else None
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -525,11 +538,21 @@ async def etapa2_simulacion(
         dte33 = build_dte_xml(caso_t33, f33, emisor_data, RECEPTOR_PRUEBA, caf33, timestamp, folios_ref, tipos_ref)
         dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
         dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
+        dtes_sim = [dte33, dte61, dte56]
+
+        # Factura de Compra (T46) con retención total del IVA — solo si hay CAF T46
+        if caf46:
+            caso_t46 = CasoSet(numero="SIM-4", tipo_doc=46,
+                               items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+            caso_t46.con_retencion = True
+            tipos_ref["SIM-4"] = 46
+            dte46 = build_dte_xml(caso_t46, f46, emisor_data, RECEPTOR_PRUEBA, caf46, timestamp, folios_ref, tipos_ref)
+            dtes_sim.append(dte46)
     except Exception as e:
         raise HTTPException(500, f"Error generando DTEs simulación: {e}")
 
     try:
-        envio_xml = build_envio_dte([dte33, dte61, dte56], emisor_data, pfx_bytes, pfx_password, timestamp)
+        envio_xml = build_envio_dte(dtes_sim, emisor_data, pfx_bytes, pfx_password, timestamp)
     except Exception as e:
         raise HTTPException(500, f"Error firmando EnvioDTE simulación: {e}")
 
@@ -564,9 +587,12 @@ async def etapa2_simulacion(
     zip_buf.seek(0)
     zip_b64   = __import__("base64").b64encode(zip_buf.getvalue()).decode()
     aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
+    folios_resp = {"T33": f33, "T61": f61, "T56": f56}
+    if caf46:
+        folios_resp["T46"] = f46
     return JSONResponse({
-        "folios": {"T33": f33, "T61": f61, "T56": f56},
-        "documentos": 3, "pdfs_generados": len(resultados),
+        "folios": folios_resp,
+        "documentos": len(dtes_sim), "pdfs_generados": len(resultados),
         "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
         "resultados": resultados, "zip_base64": zip_b64,
     })
