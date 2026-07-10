@@ -249,6 +249,7 @@ function Etapa1Step({
   const [nroBasico, setNroBasico] = useState("");
   const [nroVentas, setNroVentas] = useState("");
   const [nroCompras, setNroCompras] = useState("");
+  const [foliosIni, setFoliosIni] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
@@ -270,6 +271,9 @@ function Etapa1Step({
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
       if (nroCompras) fd.append("nro_atencion_compras", nroCompras);
+      for (const [tipo, folio] of Object.entries(foliosIni)) {
+        if (folio.trim()) fd.append(`folio_inicial_${tipo}`, folio.trim());
+      }
       const data = await postForm("/api/sii/certificar", fd) as BatchResult;
       setResult(data);
       onDone(data);
@@ -336,6 +340,31 @@ function Etapa1Step({
           <Input id="nro-compras" placeholder="ej. 4809213 (opcional)" value={nroCompras} onChange={e => setNroCompras(e.target.value)} />
         </div>
       </div>
+
+      {Object.keys(shared.cafs).length > 0 && (
+        <div>
+          <p className="mb-1 text-sm font-medium">Folio inicial por tipo (opcional)</p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Si un folio ya se usó en un envío previo, indica desde qué folio empezar para no repetirlo.
+            En blanco = usa el primer folio disponible del CAF.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-4">
+            {Object.keys(shared.cafs).sort().map(tipo => (
+              <div className="space-y-1" key={tipo}>
+                <Label htmlFor={`folio-${tipo}`}>Folio inicial T{tipo}</Label>
+                <Input
+                  id={`folio-${tipo}`}
+                  type="number"
+                  min="1"
+                  placeholder="auto"
+                  value={foliosIni[tipo] ?? ""}
+                  onChange={e => setFoliosIni(prev => ({ ...prev, [tipo]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Button size="lg" disabled={!ready || loading} onClick={generate}>
         {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando XMLs y PDFs…</> : "Generar Set de Pruebas"}
