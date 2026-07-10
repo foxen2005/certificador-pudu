@@ -421,6 +421,8 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
+  const [folio46, setFolio46] = useState("");
+  const tieneCaf46 = !!shared.cafs["46"];
 
   async function generate() {
     setLoading(true);
@@ -433,6 +435,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
       if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
+      if (folio46.trim()) fd.append("folio_46", folio46.trim());
       const data = await postForm("/api/sii/etapa2", fd) as BatchResult;
       setResult(data);
       onDone();
@@ -448,15 +451,16 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       <div>
         <h2 className="text-lg font-semibold">Etapa 2 — Simulación</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Debes emitir <strong>3 DTEs reales</strong> a una empresa certificada: una Factura (T33),
-          una Nota de Crédito (T61) que la corrija, y una Nota de Débito (T56) que anule la NC.
+          Debes emitir <strong>{tieneCaf46 ? "4 DTEs reales" : "3 DTEs reales"}</strong> a una empresa certificada: una Factura (T33),
+          una Nota de Crédito (T61) que la corrija, y una Nota de Débito (T56) que anule la NC
+          {tieneCaf46 && <>, más una <strong>Factura de Compra (T46)</strong> con retención total del IVA</>}.
           El receptor es <strong>C&C SPA (77221286-0)</strong>, una empresa de prueba del SII.
         </p>
       </div>
 
       <Card className="border-amber-200 bg-amber-50">
         <CardContent className="pt-4 text-sm text-amber-800 space-y-2">
-          <p className="font-semibold">¿Qué son los 3 DTEs de simulación?</p>
+          <p className="font-semibold">¿Qué son los {tieneCaf46 ? "4" : "3"} DTEs de simulación?</p>
           <div className="flex gap-2">
             <span>🧾</span>
             <span><strong>T33 — Factura:</strong> Por ejemplo, 2 × Producto @ $35.000 → Monto total $83.300 (con IVA 19%)</span>
@@ -469,8 +473,29 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
             <span>📈</span>
             <span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span>
           </div>
+          {tieneCaf46 && (
+            <div className="flex gap-2">
+              <span>🛒</span>
+              <span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      {tieneCaf46 && (
+        <div className="max-w-xs space-y-1">
+          <Label htmlFor="folio-46-sim">Folio inicial T46 (opcional)</Label>
+          <Input
+            id="folio-46-sim"
+            type="number"
+            min="1"
+            placeholder="auto (primer folio del CAF)"
+            value={folio46}
+            onChange={e => setFolio46(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">Si ya usaste ese folio en otra etapa, indica uno nuevo para no repetirlo.</p>
+        </div>
+      )}
 
       <Button size="lg" disabled={loading} onClick={generate}>
         {loading
