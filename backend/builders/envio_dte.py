@@ -118,7 +118,16 @@ def build_ted(tipo: int, folio: int, fecha: str, rut_receptor: str,
 
 # ─── Cálculo de montos ───────────────────────────────────────────────────────
 
-def calc_totales(items: list[ItemSet], dscto_global_pct: float | None = None):
+def calc_totales(items: list[ItemSet], dscto_global_pct: float | None = None,
+                 con_retencion: bool = False):
+    """Calcula los totales del documento.
+
+    `con_retencion=True` (Factura de Compra T46 y NC/ND de su cadena): el IVA
+    se retiene totalmente (cambio de sujeto). El emisor comprador retiene el
+    100% del IVA y paga solo el neto al proveedor, por lo que
+    `MntTotal = neto + exento` (el IVA NO se suma) y se reporta el monto
+    retenido por separado (`iva_ret`).
+    """
     neto = exento = 0
     for it in items:
         subtotal = round(it.cantidad * it.precio_unitario)
@@ -136,11 +145,18 @@ def calc_totales(items: list[ItemSet], dscto_global_pct: float | None = None):
         dscto_global = None
 
     iva = round(neto * 0.19)
-    total = neto + iva + exento
+    if con_retencion:
+        # IVA totalmente retenido: no se suma al total, se retiene completo.
+        total = neto + exento
+        iva_ret = iva
+    else:
+        total = neto + iva + exento
+        iva_ret = 0
     return {
         "neto": neto if neto > 0 else None,
         "exento": exento if exento > 0 else None,
         "iva": iva if neto > 0 else None,
+        "iva_ret": iva_ret if neto > 0 else 0,
         "total": total,
         "dscto_global": dscto_global,
     }
@@ -204,7 +220,8 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
         for it in items:
             it.es_exento = True
 
-    tots = calc_totales(items, caso.descuento_global_pct)
+    con_retencion = getattr(caso, "con_retencion", False)
+    tots = calc_totales(items, caso.descuento_global_pct, con_retencion)
     primer_item = items[0].nombre if items else "Item"
 
     ted = build_ted(
@@ -249,7 +266,8 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
     if receptor.get("cmna"):
         etree.SubElement(REC, "CmnaRecep").text = receptor["cmna"]
 
-    # Totales (orden schema DTE_v10: Neto → Exe → TasaIVA → IVA → Total)
+    # Totales (orden schema DTE_v10:
+    #   MntNeto → MntExe → TasaIVA → IVA → ImptoReten → IVANoRet → MntTotal)
     TOTS = etree.SubElement(ENC, "Totales")
     if tots["neto"]:
         etree.SubElement(TOTS, "MntNeto").text = str(tots["neto"])
@@ -258,6 +276,15 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
     if tots["neto"]:
         etree.SubElement(TOTS, "TasaIVA").text = "19"
         etree.SubElement(TOTS, "IVA").text = str(tots["iva"])
+    # Factura de Compra (T46) y NC/ND de su cadena: retención total del IVA.
+    # ImptoReten (TipoImp=15 = IVA Retenido Total) + IVANoRet=0. El IVA queda
+    # totalmente retenido, por lo que MntTotal = neto (calc_totales ya lo ajustó).
+    if con_retencion and tots["neto"]:
+        IMPRET = etree.SubElement(TOTS, "ImptoReten")
+        etree.SubElement(IMPRET, "TipoImp").text = "15"
+        etree.SubElement(IMPRET, "TasaImp").text = "19.00"
+        etree.SubElement(IMPRET, "MontoImp").text = str(tots["iva_ret"])
+        etree.SubElement(TOTS, "IVANoRet").text = "0"
     etree.SubElement(TOTS, "MntTotal").text = str(tots["total"])
 
     # Detalles (IndExe va ANTES de NmbItem por orden schema)

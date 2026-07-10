@@ -28,6 +28,9 @@ class CasoSet:
     razon_referencia: Optional[str] = None
     # Para T52 (Guía de Despacho)
     ind_traslado: Optional[int] = None
+    # Factura de Compra (T46) y NC/ND de su cadena: retención total del IVA
+    # (cambio de sujeto). Se resuelve en main.py recorriendo las referencias.
+    con_retencion: bool = False
 
 
 @dataclass
