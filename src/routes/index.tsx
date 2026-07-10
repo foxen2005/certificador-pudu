@@ -36,6 +36,28 @@ interface StepStatus {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function formatDetail(detail: unknown): string {
+  // FastAPI 422 devuelve detail como lista de objetos {loc, msg, type};
+  // otros errores lo devuelven como string. Formatear ambos de forma legible.
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (e && typeof e === "object" && "msg" in e) {
+          const loc = Array.isArray((e as { loc?: unknown[] }).loc)
+            ? (e as { loc: unknown[] }).loc.filter((p) => p !== "body").join(".")
+            : "";
+          const msg = String((e as { msg: unknown }).msg);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return typeof e === "string" ? e : JSON.stringify(e);
+      })
+      .join(" · ");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return String(detail);
+}
+
 async function postForm(path: string, fd: FormData) {
   const res = await fetch(path, { method: "POST", body: fd });
   const ct = res.headers.get("content-type") ?? "";
@@ -43,8 +65,8 @@ async function postForm(path: string, fd: FormData) {
   if (!res.ok) {
     const msg =
       typeof data === "object" && data && "detail" in data
-        ? String((data as { detail: unknown }).detail)
-        : typeof data === "string" ? data : `Error ${res.status}`;
+        ? formatDetail((data as { detail: unknown }).detail)
+        : typeof data === "string" && data ? data : `Error ${res.status}`;
     throw new Error(msg);
   }
   return data;
@@ -827,7 +849,17 @@ function CertWizard() {
             <SetupStep
               onDone={files => {
                 setShared(files);
-                markDone("setup", "etapa1");
+                // Con los archivos ya cargados, desbloquear todas las etapas para
+                // poder saltar directo a la que se necesite (ej. ir a Simulación
+                // sin repetir la Etapa 1 si ya fue aprobada en el portal SII).
+                setStatus(s => ({
+                  ...s,
+                  setup:  "done",
+                  etapa1: s.etapa1 === "locked" ? "active" : s.etapa1,
+                  etapa2: s.etapa2 === "locked" ? "active" : s.etapa2,
+                  etapa3: s.etapa3 === "locked" ? "active" : s.etapa3,
+                  etapa4: s.etapa4 === "locked" ? "active" : s.etapa4,
+                }));
                 setCurrent("etapa1");
               }}
             />
