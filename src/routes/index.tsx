@@ -444,7 +444,10 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
   const [folio46, setFolio46] = useState("");
-  const tieneCaf46 = !!shared.cafs["46"];
+  const [modo, setModo] = useState<"basico" | "compra">("basico");
+
+  const cafsBasico = ["33", "61", "56"].filter(t => !shared.cafs[t]);
+  const listo = modo === "compra" ? !!shared.cafs["46"] : cafsBasico.length === 0;
 
   async function generate() {
     setLoading(true);
@@ -453,11 +456,15 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       const fd = new FormData();
       fd.append("datos", shared.datos);
       fd.append("pfx", shared.pfx);
-      if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
-      if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
-      if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
-      if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
-      if (folio46.trim()) fd.append("folio_46", folio46.trim());
+      fd.append("modo", modo);
+      if (modo === "compra") {
+        if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
+        if (folio46.trim()) fd.append("folio_46", folio46.trim());
+      } else {
+        if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
+        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
+        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      }
       const data = await postForm("/api/sii/etapa2", fd) as BatchResult;
       setResult(data);
       onDone();
@@ -473,38 +480,50 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       <div>
         <h2 className="text-lg font-semibold">Etapa 2 — Simulación</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Debes emitir <strong>{tieneCaf46 ? "4 DTEs reales" : "3 DTEs reales"}</strong> a una empresa certificada: una Factura (T33),
-          una Nota de Crédito (T61) que la corrija, y una Nota de Débito (T56) que anule la NC
-          {tieneCaf46 && <>, más una <strong>Factura de Compra (T46)</strong> con retención total del IVA</>}.
-          El receptor es <strong>C&C SPA (77221286-0)</strong>, una empresa de prueba del SII.
+          Emite DTEs reales a la empresa de prueba <strong>C&C SPA (77221286-0)</strong>.
+          Elige qué tipo de simulación necesitas según lo que estés certificando.
         </p>
+      </div>
+
+      {/* Selector de modo */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => setModo("basico")}
+          className={`rounded-lg border p-4 text-left transition-colors ${modo === "basico" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+        >
+          <p className="font-semibold">🧾 Set Básico</p>
+          <p className="mt-1 text-xs text-muted-foreground">Factura (T33) → Nota de Crédito (T61) → Nota de Débito (T56)</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => setModo("compra")}
+          className={`rounded-lg border p-4 text-left transition-colors ${modo === "compra" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+        >
+          <p className="font-semibold">🛒 Factura de Compra</p>
+          <p className="mt-1 text-xs text-muted-foreground">Factura de Compra (T46) con retención total del IVA</p>
+        </button>
       </div>
 
       <Card className="border-amber-200 bg-amber-50">
         <CardContent className="pt-4 text-sm text-amber-800 space-y-2">
-          <p className="font-semibold">¿Qué son los {tieneCaf46 ? "4" : "3"} DTEs de simulación?</p>
-          <div className="flex gap-2">
-            <span>🧾</span>
-            <span><strong>T33 — Factura:</strong> Por ejemplo, 2 × Producto @ $35.000 → Monto total $83.300 (con IVA 19%)</span>
-          </div>
-          <div className="flex gap-2">
-            <span>📉</span>
-            <span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad de esa factura → $41.650</span>
-          </div>
-          <div className="flex gap-2">
-            <span>📈</span>
-            <span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span>
-          </div>
-          {tieneCaf46 && (
-            <div className="flex gap-2">
-              <span>🛒</span>
-              <span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span>
-            </div>
+          {modo === "basico" ? (
+            <>
+              <p className="font-semibold">Simulación Set Básico — 3 DTEs</p>
+              <div className="flex gap-2"><span>🧾</span><span><strong>T33 — Factura:</strong> 2 × Producto @ $35.000 → Total $83.300 (con IVA 19%)</span></div>
+              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad → $41.650</span></div>
+              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span></div>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Simulación Factura de Compra — 1 DTE</p>
+              <div className="flex gap-2"><span>🛒</span><span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span></div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      {tieneCaf46 && (
+      {modo === "compra" && (
         <div className="max-w-xs space-y-1">
           <Label htmlFor="folio-46-sim">Folio inicial T46 (opcional)</Label>
           <Input
@@ -519,10 +538,21 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
         </div>
       )}
 
-      <Button size="lg" disabled={loading} onClick={generate}>
+      {!listo && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            {modo === "compra"
+              ? "Falta el CAF de T46. Súbelo en la etapa de Configuración."
+              : `Faltan CAFs para el Set Básico: ${cafsBasico.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Button size="lg" disabled={loading || !listo} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando simulación…</>
-          : "Generar DTEs de Simulación"}
+          : modo === "compra" ? "Generar Factura de Compra" : "Generar DTEs de Simulación"}
       </Button>
 
       {error && (
