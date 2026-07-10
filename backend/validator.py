@@ -74,9 +74,14 @@ def validate_pdf(pdf_bytes: bytes, filename: str = "documento.pdf") -> Validatio
     page = doc[0]
     text = page.get_text()
     text_upper = text.upper()
+    # Versión con espacios normalizados: los títulos largos (ej. "FACTURA DE
+    # COMPRA ELECTRÓNICA") se parten en dos líneas al renderizar, insertando un
+    # salto de línea donde el nombre esperado tiene un espacio. Colapsar los
+    # espacios en blanco permite el match sin importar el ajuste de línea.
+    text_flat = re.sub(r"\s+", " ", text_upper)
 
     # 3. Nombre del tipo de documento en mayúsculas
-    tipo_encontrado = any(nombre in text_upper for nombre in TIPO_NOMBRE.values())
+    tipo_encontrado = any(nombre in text_flat for nombre in TIPO_NOMBRE.values())
     checks.append(Check(
         "Nombre tipo documento presente",
         tipo_encontrado,
