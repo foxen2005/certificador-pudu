@@ -302,6 +302,11 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
                 etree.SubElement(DET, "DescuentoPct").text = str(item.descuento_pct)
                 dscto_monto = round(item.cantidad * item.precio_unitario * item.descuento_pct / 100)
                 etree.SubElement(DET, "DescuentoMonto").text = str(dscto_monto)
+        # Retención total del IVA (T46 y su cadena): marcar la línea afecta con
+        # CodImpAdic=15 para que el total de ImptoReten del Encabezado cuadre con
+        # el Detalle (evita el reparo HED-2-300). Las líneas exentas no aplican.
+        if con_retencion and not item.es_exento:
+            etree.SubElement(DET, "CodImpAdic").text = "15"
         subtotal = round(item.cantidad * item.precio_unitario)
         if item.descuento_pct and item.precio_unitario > 0:
             subtotal -= round(subtotal * item.descuento_pct / 100)
