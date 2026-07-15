@@ -60,6 +60,11 @@ async def certificar(
     caf_61: UploadFile = File(None, description="CAF Nota de Crédito (T61)"),
     caf_52: UploadFile = File(None, description="CAF Guía de Despacho (T52)"),
     caf_46: UploadFile = File(None, description="CAF Factura de Compra (T46)"),
+    folio_inicial_33: int = Form(None, description="Folio inicial T33 (opcional)"),
+    folio_inicial_56: int = Form(None, description="Folio inicial T56 (opcional)"),
+    folio_inicial_61: int = Form(None, description="Folio inicial T61 (opcional)"),
+    folio_inicial_52: int = Form(None, description="Folio inicial T52 (opcional)"),
+    folio_inicial_46: int = Form(None, description="Folio inicial T46 (opcional)"),
 ):
     """
     Flujo completo: recibe SIISetDePruebas + CAFs + certificado PFX,
@@ -123,6 +128,22 @@ async def certificar(
     # Resolver items para NC/ND: copiar del caso referenciado o resolver precios
     import copy as _copy
     caso_by_num = {c.numero: c for c in sp.casos}
+
+    # Retención total del IVA (cambio de sujeto): la lleva la Factura de Compra
+    # (T46) y, por herencia, toda NC/ND que referencie (transitivamente) un T46.
+    def _tiene_retencion(caso: CasoSet, _visto: set | None = None) -> bool:
+        if caso.tipo_doc == 46:
+            return True
+        _visto = _visto or set()
+        if not caso.referencia_caso or caso.referencia_caso in _visto:
+            return False
+        _visto.add(caso.referencia_caso)
+        ref = caso_by_num.get(caso.referencia_caso)
+        return _tiene_retencion(ref, _visto) if ref else False
+
+    for caso in sp.casos:
+        caso.con_retencion = _tiene_retencion(caso)
+
     for caso in sp.casos:
         if not caso.referencia_caso:
             continue
@@ -170,6 +191,23 @@ async def certificar(
     # valor manualmente después de cada envío real aceptado — no hay persistencia
     # automática de folios todavía (ver auditoría: esto es solo para RUT 78392059-K).
     FOLIO_START = {33: 38, 56: 11, 61: 29}
+    # Override por request: permite fijar el folio inicial desde la interfaz
+    # (ej. cuando un folio ya se usó en un envío previo y hay que saltarlo).
+    _folio_overrides = {33: folio_inicial_33, 56: folio_inicial_56,
+                        61: folio_inicial_61, 52: folio_inicial_52,
+                        46: folio_inicial_46}
+    for _t, _v in _folio_overrides.items():
+        if _v is not None:
+            FOLIO_START[_t] = _v
+    # Validar que el folio inicial esté dentro del rango autorizado del CAF
+    for _t in cafs:
+        _start = FOLIO_START.get(_t, cafs[_t].desde)
+        if not (cafs[_t].desde <= _start <= cafs[_t].hasta):
+            raise HTTPException(
+                422,
+                f"Folio inicial {_start} para T{_t} fuera del rango autorizado "
+                f"del CAF ({cafs[_t].desde}-{cafs[_t].hasta})."
+            )
     folios_usados: dict[int, set] = {
         t: set(range(cafs[t].desde, FOLIO_START.get(t, cafs[t].desde)))
         for t in cafs
@@ -415,20 +453,22 @@ async def solo_validar(file: UploadFile = File(...)):
 async def etapa2_simulacion(
     datos:  UploadFile = File(..., description="DATOS.txt"),
     pfx:    UploadFile = File(..., description="Certificado .pfx/.p12"),
-    caf_33: UploadFile = File(..., description="CAF Factura T33"),
-    caf_61: UploadFile = File(..., description="CAF Nota de Crédito T61"),
-    caf_56: UploadFile = File(..., description="CAF Nota de Débito T56"),
+    caf_33: UploadFile = File(None, description="CAF Factura T33"),
+    caf_61: UploadFile = File(None, description="CAF Nota de Crédito T61"),
+    caf_56: UploadFile = File(None, description="CAF Nota de Débito T56"),
+    caf_46: UploadFile = File(None, description="CAF Factura de Compra T46"),
     folio_33: int = Form(None, description="Folio T33 (opcional, usa el siguiente disponible)"),
     folio_61: int = Form(None, description="Folio T61 (opcional)"),
     folio_56: int = Form(None, description="Folio T56 (opcional)"),
+    folio_46: int = Form(None, description="Folio T46 (opcional)"),
     producto: str = Form("Servicio tecnológico", description="Nombre del producto/servicio"),
     precio:   int = Form(35000, description="Precio unitario (sin IVA)"),
+    modo:     str = Form("basico", description="Tipo de simulación: 'basico' (T33/T61/T56) o 'compra' (T46)"),
 ):
     """
-    Etapa 2 — Genera EnvioDTE de Simulación con 3 DTEs:
-      T33 — Factura (2 unidades)
-      T61 — NC devolución parcial (1 unidad, ref T33)
-      T56 — ND anula NC (1 unidad, ref T61)
+    Etapa 2 — Genera EnvioDTE de Simulación según el modo:
+      modo='basico' → T33 Factura, T61 NC (ref T33), T56 ND (anula NC)
+      modo='compra' → T46 Factura de Compra con retención total del IVA
     """
     dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
     dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
@@ -449,49 +489,103 @@ async def etapa2_simulacion(
     pfx_password = dat_lines[4]
     pfx_bytes    = await pfx.read()
 
-    try:
-        caf33 = CAF(await caf_33.read())
-        caf61 = CAF(await caf_61.read())
-        caf56 = CAF(await caf_56.read())
-    except Exception as e:
-        raise HTTPException(422, f"Error leyendo CAF: {e}")
+    async def _leer_caf(upload, etiqueta):
+        raw = await upload.read() if upload is not None else None
+        if not raw:
+            return None
+        try:
+            return CAF(raw)
+        except Exception as e:
+            raise HTTPException(422, f"Error leyendo {etiqueta}: {e}")
 
-    # Folios: usa el indicado o el siguiente disponible desde el mínimo del CAF
-    f33 = folio_33 or caf33.desde
-    f61 = folio_61 or caf61.desde
-    f56 = folio_56 or caf56.desde
+    modo = (modo or "basico").lower()
+    if modo not in ("basico", "compra"):
+        raise HTTPException(422, f"Modo de simulación inválido: '{modo}' (usar 'basico' o 'compra')")
 
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    folios_resp: dict[str, int] = {}
 
-    # Construir casos sintéticos para Simulación
-    caso_t33 = CasoSet(numero="SIM-1", tipo_doc=33,
-                       items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
-    caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
-                       items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
-                       referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
-    caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
-                       items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
-                       referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+    if modo == "compra":
+        # ── Simulación Factura de Compra (T46 → NC T61 → ND T56) ───────────────
+        # Encadenado igual que el Set Básico, pero con la Factura de Compra como
+        # documento base. Toda la cadena lleva retención total del IVA por
+        # descender (transitivamente) de una T46.
+        caf46 = await _leer_caf(caf_46, "CAF T46")
+        caf61 = await _leer_caf(caf_61, "CAF T61")
+        caf56 = await _leer_caf(caf_56, "CAF T56")
+        faltan = [f"T{t}" for t, c in [(46, caf46), (61, caf61), (56, caf56)] if not c]
+        if faltan:
+            raise HTTPException(422, f"La simulación de Factura de Compra requiere los CAF: {', '.join(faltan)}.")
+        f46 = folio_46 or caf46.desde
+        f61 = folio_61 or caf61.desde
+        f56 = folio_56 or caf56.desde
 
-    # Aplica la regla SII REF-2-781 (CodRef=2 "Corrige Texto" no debe tener
-    # montos) por si alguna razón de referencia de simulación llegara a caer
-    # en ese código — hoy las razones hardcodeadas arriba no lo hacen, pero
-    # esto evita que se rompa silenciosamente si se generaliza.
-    aplicar_regla_corrige_texto(caso_t61)
-    aplicar_regla_corrige_texto(caso_t56)
+        caso_t46 = CasoSet(numero="SIM-1", tipo_doc=46,
+                           items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+        caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
+        caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+        # Retención total del IVA en toda la cadena (descienden de la T46).
+        caso_t46.con_retencion = True
+        caso_t61.con_retencion = True
+        caso_t56.con_retencion = True
 
-    folios_ref = {"SIM-1": f33, "SIM-2": f61}
-    tipos_ref  = {"SIM-1": 33, "SIM-2": 61, "SIM-3": 56}
+        # Regla SII REF-2-781 (CodRef=2 "Corrige Texto" no debe tener montos).
+        aplicar_regla_corrige_texto(caso_t61)
+        aplicar_regla_corrige_texto(caso_t56)
+
+        folios_ref = {"SIM-1": f46, "SIM-2": f61}
+        tipos_ref  = {"SIM-1": 46, "SIM-2": 61, "SIM-3": 56}
+        try:
+            dte46 = build_dte_xml(caso_t46, f46, emisor_data, RECEPTOR_PRUEBA, caf46, timestamp, folios_ref, tipos_ref)
+            dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
+            dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
+        except Exception as e:
+            raise HTTPException(500, f"Error generando DTEs de Factura de Compra: {e}")
+        dtes_sim = [dte46, dte61, dte56]
+        folios_resp = {"T46": f46, "T61": f61, "T56": f56}
+    else:
+        # ── Simulación Set Básico (T33 → T61 → T56) ────────────────────────────
+        caf33 = await _leer_caf(caf_33, "CAF T33")
+        caf61 = await _leer_caf(caf_61, "CAF T61")
+        caf56 = await _leer_caf(caf_56, "CAF T56")
+        faltan = [f"T{t}" for t, c in [(33, caf33), (61, caf61), (56, caf56)] if not c]
+        if faltan:
+            raise HTTPException(422, f"La simulación de Set Básico requiere los CAF: {', '.join(faltan)}.")
+        f33 = folio_33 or caf33.desde
+        f61 = folio_61 or caf61.desde
+        f56 = folio_56 or caf56.desde
+
+        caso_t33 = CasoSet(numero="SIM-1", tipo_doc=33,
+                           items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+        caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
+        caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+
+        # Regla SII REF-2-781 (CodRef=2 "Corrige Texto" no debe tener montos), por
+        # si alguna razón de referencia llegara a caer en ese código a futuro.
+        aplicar_regla_corrige_texto(caso_t61)
+        aplicar_regla_corrige_texto(caso_t56)
+
+        folios_ref = {"SIM-1": f33, "SIM-2": f61}
+        tipos_ref  = {"SIM-1": 33, "SIM-2": 61, "SIM-3": 56}
+        try:
+            dte33 = build_dte_xml(caso_t33, f33, emisor_data, RECEPTOR_PRUEBA, caf33, timestamp, folios_ref, tipos_ref)
+            dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
+            dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
+        except Exception as e:
+            raise HTTPException(500, f"Error generando DTEs simulación: {e}")
+        dtes_sim = [dte33, dte61, dte56]
+        folios_resp = {"T33": f33, "T61": f61, "T56": f56}
 
     try:
-        dte33 = build_dte_xml(caso_t33, f33, emisor_data, RECEPTOR_PRUEBA, caf33, timestamp, folios_ref, tipos_ref)
-        dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
-        dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
-    except Exception as e:
-        raise HTTPException(500, f"Error generando DTEs simulación: {e}")
-
-    try:
-        envio_xml = build_envio_dte([dte33, dte61, dte56], emisor_data, pfx_bytes, pfx_password, timestamp)
+        envio_xml = build_envio_dte(dtes_sim, emisor_data, pfx_bytes, pfx_password, timestamp)
     except Exception as e:
         raise HTTPException(500, f"Error firmando EnvioDTE simulación: {e}")
 
@@ -527,8 +621,9 @@ async def etapa2_simulacion(
     zip_b64   = __import__("base64").b64encode(zip_buf.getvalue()).decode()
     aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
     return JSONResponse({
-        "folios": {"T33": f33, "T61": f61, "T56": f56},
-        "documentos": 3, "pdfs_generados": len(resultados),
+        "modo": modo,
+        "folios": folios_resp,
+        "documentos": len(dtes_sim), "pdfs_generados": len(resultados),
         "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
         "resultados": resultados, "zip_base64": zip_b64,
     })

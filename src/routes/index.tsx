@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { UploadBox } from "@/components/sii/UploadBox";
 import { PortalGuide } from "@/components/sii/PortalGuide";
 import { Results, type BatchResult } from "@/components/sii/Results";
+import { VersionBadge } from "@/components/VersionBadge";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -35,6 +36,28 @@ interface StepStatus {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function formatDetail(detail: unknown): string {
+  // FastAPI 422 devuelve detail como lista de objetos {loc, msg, type};
+  // otros errores lo devuelven como string. Formatear ambos de forma legible.
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (e && typeof e === "object" && "msg" in e) {
+          const loc = Array.isArray((e as { loc?: unknown[] }).loc)
+            ? (e as { loc: unknown[] }).loc.filter((p) => p !== "body").join(".")
+            : "";
+          const msg = String((e as { msg: unknown }).msg);
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return typeof e === "string" ? e : JSON.stringify(e);
+      })
+      .join(" · ");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return String(detail);
+}
+
 async function postForm(path: string, fd: FormData) {
   const res = await fetch(path, { method: "POST", body: fd });
   const ct = res.headers.get("content-type") ?? "";
@@ -42,8 +65,8 @@ async function postForm(path: string, fd: FormData) {
   if (!res.ok) {
     const msg =
       typeof data === "object" && data && "detail" in data
-        ? String((data as { detail: unknown }).detail)
-        : typeof data === "string" ? data : `Error ${res.status}`;
+        ? formatDetail((data as { detail: unknown }).detail)
+        : typeof data === "string" && data ? data : `Error ${res.status}`;
     throw new Error(msg);
   }
   return data;
@@ -134,9 +157,10 @@ function SetupStep({
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
+  const [caf46, setCaf46] = useState<File | null>(null);
   const [claveError, setClaveError] = useState(false);
 
-  const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61);
+  const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61 || caf46);
 
   async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
@@ -157,7 +181,7 @@ function SetupStep({
       return;
     }
     setClaveError(false);
-    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } });
+    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(caf46 && { "46": caf46 }) } });
   }
 
   return (
@@ -197,7 +221,7 @@ function SetupStep({
             <div>
               <strong className="text-foreground">CAF (Código de Autorización de Folios)</strong> — Solicítalo en
               <em> maullin.sii.cl → Boletas y Documentos → Solicitar Folios</em>. Pide un CAF por
-              cada tipo de DTE que quieras certificar (T33, T56, T61).
+              cada tipo de DTE que quieras certificar (T33, T56, T61, T46).
             </div>
           </div>
         </CardContent>
@@ -214,6 +238,7 @@ function SetupStep({
           <UploadBox label="CAF Factura Electrónica" hint="dte33d1a100.xml" icon="🧾" accept=".xml" optionalTag="T33" file={caf33} onChange={setCaf33} />
           <UploadBox label="CAF Nota de Crédito" hint="dte61d1a100.xml" icon="📉" accept=".xml" optionalTag="T61" file={caf61} onChange={setCaf61} />
           <UploadBox label="CAF Nota de Débito" hint="dte56d1a100.xml" icon="📈" accept=".xml" optionalTag="T56" file={caf56} onChange={setCaf56} />
+          <UploadBox label="CAF Factura de Compra" hint="dte46d1a100.xml" icon="🛒" accept=".xml" optionalTag="T46" file={caf46} onChange={setCaf46} />
         </div>
       </div>
 
@@ -246,6 +271,7 @@ function Etapa1Step({
   const [nroBasico, setNroBasico] = useState("");
   const [nroVentas, setNroVentas] = useState("");
   const [nroCompras, setNroCompras] = useState("");
+  const [foliosIni, setFoliosIni] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
@@ -263,9 +289,13 @@ function Etapa1Step({
       if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
       if (nroCompras) fd.append("nro_atencion_compras", nroCompras);
+      for (const [tipo, folio] of Object.entries(foliosIni)) {
+        if (folio.trim()) fd.append(`folio_inicial_${tipo}`, folio.trim());
+      }
       const data = await postForm("/api/sii/certificar", fd) as BatchResult;
       setResult(data);
       onDone(data);
@@ -333,6 +363,31 @@ function Etapa1Step({
         </div>
       </div>
 
+      {Object.keys(shared.cafs).length > 0 && (
+        <div>
+          <p className="mb-1 text-sm font-medium">Folio inicial por tipo (opcional)</p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Si un folio ya se usó en un envío previo, indica desde qué folio empezar para no repetirlo.
+            En blanco = usa el primer folio disponible del CAF.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-4">
+            {Object.keys(shared.cafs).sort().map(tipo => (
+              <div className="space-y-1" key={tipo}>
+                <Label htmlFor={`folio-${tipo}`}>Folio inicial T{tipo}</Label>
+                <Input
+                  id={`folio-${tipo}`}
+                  type="number"
+                  min="1"
+                  placeholder="auto"
+                  value={foliosIni[tipo] ?? ""}
+                  onChange={e => setFoliosIni(prev => ({ ...prev, [tipo]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Button size="lg" disabled={!ready || loading} onClick={generate}>
         {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando XMLs y PDFs…</> : "Generar Set de Pruebas"}
       </Button>
@@ -388,6 +443,14 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
+  const [folio46, setFolio46] = useState("");
+  const [folio61, setFolio61] = useState("");
+  const [folio56, setFolio56] = useState("");
+  const [modo, setModo] = useState<"basico" | "compra">("basico");
+
+  const cafsBasico = ["33", "61", "56"].filter(t => !shared.cafs[t]);
+  const cafsCompra = ["46", "61", "56"].filter(t => !shared.cafs[t]);
+  const listo = modo === "compra" ? cafsCompra.length === 0 : cafsBasico.length === 0;
 
   async function generate() {
     setLoading(true);
@@ -396,9 +459,19 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       const fd = new FormData();
       fd.append("datos", shared.datos);
       fd.append("pfx", shared.pfx);
-      if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
-      if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
-      if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      fd.append("modo", modo);
+      if (modo === "compra") {
+        if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
+        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
+        if (folio46.trim()) fd.append("folio_46", folio46.trim());
+        if (folio61.trim()) fd.append("folio_61", folio61.trim());
+        if (folio56.trim()) fd.append("folio_56", folio56.trim());
+      } else {
+        if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
+        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
+        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      }
       const data = await postForm("/api/sii/etapa2", fd) as BatchResult;
       setResult(data);
       onDone();
@@ -414,34 +487,84 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       <div>
         <h2 className="text-lg font-semibold">Etapa 2 — Simulación</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Debes emitir <strong>3 DTEs reales</strong> a una empresa certificada: una Factura (T33),
-          una Nota de Crédito (T61) que la corrija, y una Nota de Débito (T56) que anule la NC.
-          El receptor es <strong>C&C SPA (77221286-0)</strong>, una empresa de prueba del SII.
+          Emite DTEs reales a la empresa de prueba <strong>C&C SPA (77221286-0)</strong>.
+          Elige qué tipo de simulación necesitas según lo que estés certificando.
         </p>
+      </div>
+
+      {/* Selector de modo */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => setModo("basico")}
+          className={`rounded-lg border p-4 text-left transition-colors ${modo === "basico" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+        >
+          <p className="font-semibold">🧾 Set Básico</p>
+          <p className="mt-1 text-xs text-muted-foreground">Factura (T33) → Nota de Crédito (T61) → Nota de Débito (T56)</p>
+        </button>
+        <button
+          type="button"
+          onClick={() => setModo("compra")}
+          className={`rounded-lg border p-4 text-left transition-colors ${modo === "compra" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
+        >
+          <p className="font-semibold">🛒 Factura de Compra</p>
+          <p className="mt-1 text-xs text-muted-foreground">Factura de Compra (T46) con retención total del IVA</p>
+        </button>
       </div>
 
       <Card className="border-amber-200 bg-amber-50">
         <CardContent className="pt-4 text-sm text-amber-800 space-y-2">
-          <p className="font-semibold">¿Qué son los 3 DTEs de simulación?</p>
-          <div className="flex gap-2">
-            <span>🧾</span>
-            <span><strong>T33 — Factura:</strong> Por ejemplo, 2 × Producto @ $35.000 → Monto total $83.300 (con IVA 19%)</span>
-          </div>
-          <div className="flex gap-2">
-            <span>📉</span>
-            <span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad de esa factura → $41.650</span>
-          </div>
-          <div className="flex gap-2">
-            <span>📈</span>
-            <span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span>
-          </div>
+          {modo === "basico" ? (
+            <>
+              <p className="font-semibold">Simulación Set Básico — 3 DTEs</p>
+              <div className="flex gap-2"><span>🧾</span><span><strong>T33 — Factura:</strong> 2 × Producto @ $35.000 → Total $83.300 (con IVA 19%)</span></div>
+              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad → $41.650</span></div>
+              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span></div>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Simulación Factura de Compra — 3 DTEs</p>
+              <div className="flex gap-2"><span>🛒</span><span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span></div>
+              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución de 1 unidad, referencia la Factura de Compra (IVA retenido)</span></div>
+              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior (IVA retenido)</span></div>
+            </>
+          )}
         </CardContent>
       </Card>
 
-      <Button size="lg" disabled={loading} onClick={generate}>
+      {modo === "compra" && (
+        <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label htmlFor="folio-46-sim">Folio T46 — Factura de Compra</Label>
+            <Input id="folio-46-sim" type="number" min="1" placeholder="auto (CAF)" value={folio46} onChange={e => setFolio46(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="folio-61-sim">Folio T61 — Nota de Crédito</Label>
+            <Input id="folio-61-sim" type="number" min="1" placeholder="auto (CAF)" value={folio61} onChange={e => setFolio61(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="folio-56-sim">Folio T56 — Nota de Débito</Label>
+            <Input id="folio-56-sim" type="number" min="1" placeholder="auto (CAF)" value={folio56} onChange={e => setFolio56(e.target.value)} />
+          </div>
+          <p className="text-xs text-muted-foreground sm:col-span-3">Folio opcional por documento. Si ya usaste alguno en otra etapa, indica uno nuevo para no repetirlo.</p>
+        </div>
+      )}
+
+      {!listo && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            {modo === "compra"
+              ? `Faltan CAFs para la Factura de Compra: ${cafsCompra.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`
+              : `Faltan CAFs para el Set Básico: ${cafsBasico.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Button size="lg" disabled={loading || !listo} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando simulación…</>
-          : "Generar DTEs de Simulación"}
+          : modo === "compra" ? "Generar Factura de Compra" : "Generar DTEs de Simulación"}
       </Button>
 
       {error && (
@@ -728,7 +851,10 @@ function CertWizard() {
             <h1 className="text-lg font-bold text-foreground">Certificador DTE</h1>
             <p className="text-xs text-muted-foreground">Guía paso a paso — Certificación SII Chile</p>
           </div>
-          <Badge variant="outline" className="ml-auto">Ambiente Certificación</Badge>
+          <div className="ml-auto flex items-center gap-2">
+            <VersionBadge />
+            <Badge variant="outline">Ambiente Certificación</Badge>
+          </div>
         </div>
       </header>
 
@@ -765,7 +891,17 @@ function CertWizard() {
             <SetupStep
               onDone={files => {
                 setShared(files);
-                markDone("setup", "etapa1");
+                // Con los archivos ya cargados, desbloquear todas las etapas para
+                // poder saltar directo a la que se necesite (ej. ir a Simulación
+                // sin repetir la Etapa 1 si ya fue aprobada en el portal SII).
+                setStatus(s => ({
+                  ...s,
+                  setup:  "done",
+                  etapa1: s.etapa1 === "locked" ? "active" : s.etapa1,
+                  etapa2: s.etapa2 === "locked" ? "active" : s.etapa2,
+                  etapa3: s.etapa3 === "locked" ? "active" : s.etapa3,
+                  etapa4: s.etapa4 === "locked" ? "active" : s.etapa4,
+                }));
                 setCurrent("etapa1");
               }}
             />
