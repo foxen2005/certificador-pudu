@@ -444,10 +444,13 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
   const [folio46, setFolio46] = useState("");
+  const [folio61, setFolio61] = useState("");
+  const [folio56, setFolio56] = useState("");
   const [modo, setModo] = useState<"basico" | "compra">("basico");
 
   const cafsBasico = ["33", "61", "56"].filter(t => !shared.cafs[t]);
-  const listo = modo === "compra" ? !!shared.cafs["46"] : cafsBasico.length === 0;
+  const cafsCompra = ["46", "61", "56"].filter(t => !shared.cafs[t]);
+  const listo = modo === "compra" ? cafsCompra.length === 0 : cafsBasico.length === 0;
 
   async function generate() {
     setLoading(true);
@@ -459,7 +462,11 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       fd.append("modo", modo);
       if (modo === "compra") {
         if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
+        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
         if (folio46.trim()) fd.append("folio_46", folio46.trim());
+        if (folio61.trim()) fd.append("folio_61", folio61.trim());
+        if (folio56.trim()) fd.append("folio_56", folio56.trim());
       } else {
         if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
         if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
@@ -516,25 +523,30 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
             </>
           ) : (
             <>
-              <p className="font-semibold">Simulación Factura de Compra — 1 DTE</p>
+              <p className="font-semibold">Simulación Factura de Compra — 3 DTEs</p>
               <div className="flex gap-2"><span>🛒</span><span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span></div>
+              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución de 1 unidad, referencia la Factura de Compra (IVA retenido)</span></div>
+              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior (IVA retenido)</span></div>
             </>
           )}
         </CardContent>
       </Card>
 
       {modo === "compra" && (
-        <div className="max-w-xs space-y-1">
-          <Label htmlFor="folio-46-sim">Folio inicial T46 (opcional)</Label>
-          <Input
-            id="folio-46-sim"
-            type="number"
-            min="1"
-            placeholder="auto (primer folio del CAF)"
-            value={folio46}
-            onChange={e => setFolio46(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">Si ya usaste ese folio en otra etapa, indica uno nuevo para no repetirlo.</p>
+        <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label htmlFor="folio-46-sim">Folio T46 — Factura de Compra</Label>
+            <Input id="folio-46-sim" type="number" min="1" placeholder="auto (CAF)" value={folio46} onChange={e => setFolio46(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="folio-61-sim">Folio T61 — Nota de Crédito</Label>
+            <Input id="folio-61-sim" type="number" min="1" placeholder="auto (CAF)" value={folio61} onChange={e => setFolio61(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="folio-56-sim">Folio T56 — Nota de Débito</Label>
+            <Input id="folio-56-sim" type="number" min="1" placeholder="auto (CAF)" value={folio56} onChange={e => setFolio56(e.target.value)} />
+          </div>
+          <p className="text-xs text-muted-foreground sm:col-span-3">Folio opcional por documento. Si ya usaste alguno en otra etapa, indica uno nuevo para no repetirlo.</p>
         </div>
       )}
 
@@ -543,7 +555,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
             {modo === "compra"
-              ? "Falta el CAF de T46. Súbelo en la etapa de Configuración."
+              ? `Faltan CAFs para la Factura de Compra: ${cafsCompra.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`
               : `Faltan CAFs para el Set Básico: ${cafsBasico.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`}
           </AlertDescription>
         </Alert>

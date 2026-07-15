@@ -506,22 +506,47 @@ async def etapa2_simulacion(
     folios_resp: dict[str, int] = {}
 
     if modo == "compra":
-        # ── Simulación de Factura de Compra (T46) ──────────────────────────────
+        # ── Simulación Factura de Compra (T46 → NC T61 → ND T56) ───────────────
+        # Encadenado igual que el Set Básico, pero con la Factura de Compra como
+        # documento base. Toda la cadena lleva retención total del IVA por
+        # descender (transitivamente) de una T46.
         caf46 = await _leer_caf(caf_46, "CAF T46")
-        if not caf46:
-            raise HTTPException(422, "La simulación de Factura de Compra requiere el CAF de T46.")
+        caf61 = await _leer_caf(caf_61, "CAF T61")
+        caf56 = await _leer_caf(caf_56, "CAF T56")
+        faltan = [f"T{t}" for t, c in [(46, caf46), (61, caf61), (56, caf56)] if not c]
+        if faltan:
+            raise HTTPException(422, f"La simulación de Factura de Compra requiere los CAF: {', '.join(faltan)}.")
         f46 = folio_46 or caf46.desde
+        f61 = folio_61 or caf61.desde
+        f56 = folio_56 or caf56.desde
 
         caso_t46 = CasoSet(numero="SIM-1", tipo_doc=46,
                            items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+        caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
+        caso_t56 = CasoSet(numero="SIM-3", tipo_doc=56,
+                           items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
+                           referencia_caso="SIM-2", razon_referencia="Anula nota de credito electronica")
+        # Retención total del IVA en toda la cadena (descienden de la T46).
         caso_t46.con_retencion = True
+        caso_t61.con_retencion = True
+        caso_t56.con_retencion = True
+
+        # Regla SII REF-2-781 (CodRef=2 "Corrige Texto" no debe tener montos).
+        aplicar_regla_corrige_texto(caso_t61)
+        aplicar_regla_corrige_texto(caso_t56)
+
+        folios_ref = {"SIM-1": f46, "SIM-2": f61}
+        tipos_ref  = {"SIM-1": 46, "SIM-2": 61, "SIM-3": 56}
         try:
-            dte46 = build_dte_xml(caso_t46, f46, emisor_data, RECEPTOR_PRUEBA, caf46,
-                                  timestamp, {"SIM-1": f46}, {"SIM-1": 46})
+            dte46 = build_dte_xml(caso_t46, f46, emisor_data, RECEPTOR_PRUEBA, caf46, timestamp, folios_ref, tipos_ref)
+            dte61 = build_dte_xml(caso_t61, f61, emisor_data, RECEPTOR_PRUEBA, caf61, timestamp, folios_ref, tipos_ref)
+            dte56 = build_dte_xml(caso_t56, f56, emisor_data, RECEPTOR_PRUEBA, caf56, timestamp, folios_ref, tipos_ref)
         except Exception as e:
-            raise HTTPException(500, f"Error generando DTE de Factura de Compra: {e}")
-        dtes_sim = [dte46]
-        folios_resp = {"T46": f46}
+            raise HTTPException(500, f"Error generando DTEs de Factura de Compra: {e}")
+        dtes_sim = [dte46, dte61, dte56]
+        folios_resp = {"T46": f46, "T61": f61, "T56": f56}
     else:
         # ── Simulación Set Básico (T33 → T61 → T56) ────────────────────────────
         caf33 = await _leer_caf(caf_33, "CAF T33")
