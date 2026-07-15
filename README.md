@@ -173,6 +173,13 @@ El SII usa Java spec-compliant que NO hace eso → digest distinto → rechazo (
 
 ---
 
+## Lecciones técnicas y estado de certificación (trackeado en git)
+
+`sets/` está en `.gitignore` (contiene certificados/CAFs privados), así que documentos de referencia que vivían ahí NO viajaban con el repo. Se movieron copias a `backend/docs/` (sí trackeado):
+
+- `backend/docs/LECCIONES_TECNICAS.md` — catálogo completo de errores SII encontrados y sus fixes (firma XMLDsig, folios, encoding, timbre, etc.) — **leer antes de tocar firma, folios o el generador de PDFs**.
+- `backend/docs/RESUMEN_CERTIFICACION_78392059K.md` — estado y folios realmente consumidos por la certificación de PUDU TECNOLOGIA SPA. Fuente de verdad para `FOLIO_START`/`FOLIOS_YA_ENVIADOS` — compararlos contra este archivo antes de generar documentos para subir de verdad al SII.
+
 ## Particularidades del set PUDU
 
 ### NC con CodRef=2 (Corrige Texto)
