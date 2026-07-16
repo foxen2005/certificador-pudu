@@ -131,9 +131,21 @@ def validate_pdf(pdf_bytes: bytes, filename: str = "documento.pdf") -> Validatio
 
     # 9. IVA con tasa explícita (documentos afectos: Factura Electrónica T33/T46
     #    y Notas de Crédito/Débito que no sean explícitamente exentas — las NC/ND
-    #    también son documentos afectos a IVA y deben mostrar la tasa)
-    is_afecta = ("FACTURA ELECTRÓNICA" in text_upper
-                 and "EXENTA" not in text_upper)
+    #    también son documentos afectos a IVA y deben mostrar la tasa).
+    #
+    #    Ojo: una NC/ND que referencia una Factura la menciona en su tabla de
+    #    "Referencias a otros documentos" (ej. "FACTURA ELECTRÓNICA  38  ...")
+    #    — buscar "FACTURA ELECTRÓNICA" en todo el texto también matchea ahí,
+    #    no solo en el recuadro de tipo propio del documento. Restringir la
+    #    búsqueda al encabezado (antes de la tabla de referencias) evita el
+    #    falso positivo.
+    header_upper = text_upper.split("REFERENCIAS A OTROS DOCUMENTOS")[0]
+    # Una NC/ND con CodRef=2 ("Corrige Texto"/Giro) tiene Monto Total=0 por
+    # regla SII REF-2-781 — legítimamente no lleva línea de IVA.
+    es_monto_cero = bool(re.search(r'MONTO\s+TOTAL:\s*\$?\s*0\b', text_upper))
+    is_afecta = ("FACTURA ELECTRÓNICA" in header_upper
+                 and "EXENTA" not in header_upper
+                 and not es_monto_cero)
     if is_afecta:
         has_tasa = bool(re.search(r'IVA\s*\(\s*\d+\s*%\s*\)', text, re.IGNORECASE))
         checks.append(Check(
