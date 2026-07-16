@@ -212,3 +212,17 @@ root = etree.fromstring(xml_bytes, etree.XMLParser(encoding="iso-8859-1"))
 **Causa**: `main.py`, `test_certificacion.py` y `firmar_libro_ventas.py` reimplementaban cada uno su propia versión de "si CodRef=2, forzar MntTotal=0" — con pequeñas diferencias entre copias (una vaciaba los items a `[]`, otra preservaba nombre/cantidad y solo zeroeaba el precio).
 
 **Fix**: Centralizada en `aplicar_regla_corrige_texto()` dentro de `builders/envio_dte.py`. Los 3 archivos ahora la importan de ahí. Se adoptó el comportamiento de `test_certificacion.py`/`firmar_libro_ventas.py` (preservar items, zerear precio) por ser el que corresponde al flujo ya validado con el SII real.
+
+---
+
+## 19. Validador: falso positivo de "IVA con tasa explícita" en NC que referencia una Factura
+
+**Error**: `validator.py` marcaba `FALLA` el check "IVA con tasa explícita" en una Nota de Crédito (T61) con CodRef=2 ("Corrige Giro del Receptor"), aunque el documento era correcto (Monto Total=0, sin línea de IVA por diseño — regla REF-2-781).
+
+**Causa**: `is_afecta` buscaba la substring `"FACTURA ELECTRÓNICA"` en TODO el texto del PDF, no solo en el recuadro de tipo propio del documento. Una NC que referencia una Factura la menciona en su tabla "Referencias a otros documentos" (`FACTURA ELECTRÓNICA  38  ...`), lo cual matcheaba igual y activaba el check en un documento que en realidad es una Nota de Crédito de monto cero, sin ninguna línea de IVA que mostrar.
+
+**Fix** en `validator.py`:
+1. Restringir la búsqueda de `"FACTURA ELECTRÓNICA"` al texto ANTES de `"REFERENCIAS A OTROS DOCUMENTOS"` (el encabezado propio del documento, no las referencias).
+2. Excluir además cualquier documento con `Monto Total: $0` — una NC/ND con CodRef=2 nunca debe llevar tasa de IVA explícita, sin importar el tipo de documento referenciado.
+
+**Cómo se encontró**: probando `/certificar` end-to-end contra el set real después de un merge grande — bajó de 12/12 a 11/12 aprobados. Sirve de recordatorio: cualquier cambio a `validator.py` debe probarse contra el set completo (incluye casos CodRef=2), no solo contra un DTE con montos simples.
