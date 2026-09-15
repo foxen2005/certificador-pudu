@@ -218,7 +218,8 @@ def build_resultado_dte(datos, ts, rut_emisor_set, dtes):
         etree.SubElement(RD, "RUTEmisor").text = dte["rut_emisor"]
         etree.SubElement(RD, "RUTRecep").text  = dte["rut_recep"]
         etree.SubElement(RD, "MntTotal").text  = dte["mnt_total"]
-        etree.SubElement(RD, "CodEnvio").text  = str(i)
+        # XSD: código del envío en que se recibió el DTE = el de RecepcionEnvio (1)
+        etree.SubElement(RD, "CodEnvio").text  = "1"
         if es_nuestro:
             etree.SubElement(RD, "EstadoDTE").text      = "0"
             etree.SubElement(RD, "EstadoDTEGlosa").text = "ACEPTADO OK"

@@ -8,6 +8,7 @@ export interface DatosLinea {
   nombre: string;
   ejemplo: string;
   nota?: string;
+  opcional?: boolean;
 }
 
 export const DATOS_LINEAS: DatosLinea[] = [
@@ -64,7 +65,20 @@ export const DATOS_LINEAS: DatosLinea[] = [
     ejemplo: "2026-05-05",
     nota: "La fecha publicada en los datos de tu empresa en maullin.sii.cl — NO la de hoy",
   },
+  {
+    n: 12,
+    nombre: "Email de contacto (opcional)",
+    ejemplo: "contacto@empresa.cl",
+    nota: "Va como MailContacto en las respuestas de Intercambio (Etapa 3)",
+    opcional: true,
+  },
 ];
+
+// Líneas obligatorias = todas las que no son opcionales (hoy: 11).
+export const DATOS_OBLIGATORIAS = DATOS_LINEAS.filter(
+  (d) => !d.opcional,
+).length;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const RUT_RE = /^\d{7,8}-[\dkK]$/;
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -108,12 +122,12 @@ export function validarDatosTxt(texto: string): DatosValidacion {
     .filter(Boolean);
   const errores: string[] = [];
 
-  if (lineas.length < DATOS_LINEAS.length) {
-    const faltan = DATOS_LINEAS.slice(lineas.length).map(
+  if (lineas.length < DATOS_OBLIGATORIAS) {
+    const faltan = DATOS_LINEAS.slice(lineas.length, DATOS_OBLIGATORIAS).map(
       (d) => `${d.n} (${d.nombre})`,
     );
     errores.push(
-      `El archivo tiene ${lineas.length} línea(s) y necesita ${DATOS_LINEAS.length}. Faltan: ${faltan.join(", ")}.`,
+      `El archivo tiene ${lineas.length} línea(s) y necesita ${DATOS_OBLIGATORIAS}. Faltan: ${faltan.join(", ")}.`,
     );
     return { lineas, errores };
   }
@@ -135,6 +149,11 @@ export function validarDatosTxt(texto: string): DatosValidacion {
       `Línea 11: "${lineas[10]}" debe ser una fecha YYYY-MM-DD (ej. 2026-05-05).`,
     );
   }
+  if (lineas[11] && !EMAIL_RE.test(lineas[11])) {
+    errores.push(
+      `Línea 12: "${lineas[11]}" no es un correo válido (o déjala vacía).`,
+    );
+  }
   return { lineas, errores };
 }
 
@@ -149,5 +168,10 @@ export function decodificarDatos(buf: ArrayBuffer): string {
 }
 
 export function plantillaDatosTxt(): string {
-  return DATOS_LINEAS.map((d) => d.ejemplo).join("\n") + "\n";
+  // Solo las obligatorias: la 12 (email) se agrega a mano si se quiere.
+  return (
+    DATOS_LINEAS.filter((d) => !d.opcional)
+      .map((d) => d.ejemplo)
+      .join("\n") + "\n"
+  );
 }

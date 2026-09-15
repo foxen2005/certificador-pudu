@@ -121,12 +121,13 @@ def validate_pdf(pdf_bytes: bytes, filename: str = "documento.pdf") -> Validatio
         "Presente" if has_verificar else "No encontrada"
     ))
 
-    # 8. Resolución mencionada
-    has_resol = bool(re.search(r'resoluci[oó]n\s+\d+\s+de\s+\d{4}', text, re.IGNORECASE))
+    # 8. Resolución mencionada — el Manual de Muestras Impresas (§1.5) pide
+    #    literalmente "Res. XX de AAAA"; se acepta también "Resolución XX de AAAA".
+    has_resol = bool(re.search(r'res(?:\.|oluci[oó]n)\s+\d+\s+de\s+\d{4}', text, re.IGNORECASE))
     checks.append(Check(
         "Resolución SII mencionada",
         has_resol,
-        "Presente" if has_resol else "No encontrada (ej: Resolución 0 de 2026)"
+        "Presente" if has_resol else "No encontrada (ej: Res. 0 de 2026)"
     ))
 
     # 9. IVA con tasa explícita (documentos afectos: Factura Electrónica T33/T46

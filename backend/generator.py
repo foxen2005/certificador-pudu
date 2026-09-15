@@ -144,9 +144,11 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
     recuadro_w = 5.5 * cm
     emisor_w = usable_w - recuadro_w - 0.3 * cm
 
-    # Recuadro tipo documento (rojo, borde)
+    # Recuadro tipo documento (rojo, borde). Manual de Muestras Impresas §1.1.4:
+    # solo RUT emisor, nombre del documento y N° folio; letras ≥ 10 pt en
+    # mayúscula y negrita; mínimo 1,5 × 5,5 cm; bajo el recuadro la Unidad SII.
     recuadro_data = [
-        [Paragraph(f"R.U.T.: {fmt_rut(dte.rut_emisor)}", bold)],
+        [Paragraph(f"R.U.T.: {fmt_rut(dte.rut_emisor)}", center_bold)],
         [Paragraph(tipo_nombre, center_bold)],
         [Paragraph(f"N° {dte.folio}", center_bold)],
     ]
@@ -168,7 +170,15 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
         Paragraph(f"{dte.dir_origen}, {dte.cmna_origen}", normal),
     ]
 
-    header_data = [[emisor_lines, recuadro_table]]
+    # Unidad SII: el manual la pide directamente BAJO el recuadro (columna derecha).
+    sii_unit = dte.unidad_sii or dte.cmna_origen
+    recuadro_col = [
+        recuadro_table,
+        Spacer(1, 1*mm),
+        Paragraph(f"<b>S.I.I. – {sii_unit.upper()}</b>", center),
+    ]
+
+    header_data = [[emisor_lines, recuadro_col]]
     header_table = Table(header_data, colWidths=[emisor_w, recuadro_w + 0.3*cm])
     header_table.setStyle(TableStyle([
         ("VALIGN", (0,0), (-1,-1), "TOP"),
@@ -178,9 +188,6 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
         ("BOTTOMPADDING", (0,0), (-1,-1), 0),
     ]))
     story.append(header_table)
-
-    # Unidad SII bajo el recuadro — va pegada con un pequeño spacer
-    sii_unit = dte.unidad_sii or dte.cmna_origen
     story.append(Spacer(1, 1*mm))
 
     # Línea separadora
@@ -188,10 +195,7 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
     story.append(Spacer(1, 2*mm))
 
     # ─── FECHA ──────────────────────────────────────────────────────────────
-    story.append(Paragraph(
-        f"<b>S.I.I. – {sii_unit.upper()}</b> &nbsp;&nbsp;&nbsp; {fmt_date(dte.fecha_emision)}",
-        normal
-    ))
+    story.append(Paragraph(f"<b>Fecha de emisión:</b> {fmt_date(dte.fecha_emision)}", normal))
     story.append(Spacer(1, 2*mm))
 
     # ─── RECEPTOR ───────────────────────────────────────────────────────────
@@ -355,28 +359,37 @@ def generate_pdf(dte: DTE, cedible: bool = False) -> bytes:
         barcode = PDF417Barcode(ted_for_barcode, width_cm=5.0, height_cm=2.0)
         nro = dte.nro_resol or "0"
         year = (dte.fch_resol or "2026-01-01").split("-")[0]
+        # Manual §1.5: el rótulo "Timbre Electrónico SII" va BAJO el timbre (el
+        # lector del SII lo usa para localizar el barcode), luego "Res. N de AAAA"
+        # y "Verifique documento: www.sii.cl", letra ≥ 6.
         timbre_label = Paragraph(
             f"Timbre Electrónico SII<br/>"
-            f"Resolución {nro} de {year} – "
-            f"Verifique documento: <b>www.sii.cl</b>",
-            ParagraphStyle("timbre", fontName="Helvetica", fontSize=6, leading=8)
+            f"Res. {nro} de {year} – Verifique documento: www.sii.cl",
+            ParagraphStyle("timbre", fontName="Helvetica", fontSize=6, leading=8,
+                           alignment=TA_CENTER)
         )
+        timbre_col = Table([[barcode], [timbre_label]], colWidths=[5.2*cm])
+        timbre_col.setStyle(TableStyle([
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("LEFTPADDING", (0,0), (-1,-1), 0),
+            ("RIGHTPADDING", (0,0), (-1,-1), 0),
+            ("TOPPADDING", (0,0), (-1,-1), 0),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+        ]))
 
-        timbre_data = [[barcode, timbre_label]]
+        # Celda derecha vacía como flowable (un str junto a una Table rompe el build)
+        timbre_data = [[timbre_col, Spacer(0, 0)]]
         if cedible and dte.tipo in CEDIBLE_TIPOS:
             cedible_label = "CEDIBLE CON SU FACTURA" if dte.tipo == 52 else "CEDIBLE"
-            timbre_data[0].append(
-                Paragraph(f"<b>{cedible_label}</b>",
-                          ParagraphStyle("ced", fontName="Helvetica-Bold", fontSize=10,
-                                         alignment=TA_RIGHT))
+            timbre_data[0][1] = Paragraph(
+                f"<b>{cedible_label}</b>",
+                ParagraphStyle("ced", fontName="Helvetica-Bold", fontSize=10, alignment=TA_RIGHT),
             )
-            col_w = [5.2*cm, usable_w - 9*cm, 2.8*cm]
-        else:
-            col_w = [5.2*cm, usable_w - 5.2*cm]
+        col_w = [5.2*cm, usable_w - 5.2*cm]
 
-        timbre_table = Table([timbre_data], colWidths=col_w)
+        timbre_table = Table(timbre_data, colWidths=col_w, hAlign="LEFT")
         timbre_table.setStyle(TableStyle([
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("VALIGN", (0,0), (-1,-1), "BOTTOM"),
             ("LEFTPADDING", (0,0), (-1,-1), 0),
             ("RIGHTPADDING", (0,0), (-1,-1), 0),
             ("TOPPADDING", (0,0), (-1,-1), 0),

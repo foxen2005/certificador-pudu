@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, Download, AlertCircle, ChevronRight, Lock, FileDown } from "lucide-react";
-import { DATOS_LINEAS, decodificarDatos, plantillaDatosTxt, validarDatosTxt } from "@/lib/datos-txt";
+import { DATOS_LINEAS, DATOS_OBLIGATORIAS, decodificarDatos, plantillaDatosTxt, validarDatosTxt } from "@/lib/datos-txt";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -190,7 +190,7 @@ function DatosTxtGuide({ datos, onValidez }: { datos: File | null; onValidez: (o
     <Card className={ok ? "border-green-200" : errores?.length ? "border-destructive/40" : ""}>
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-base">Formato del DATOS.txt — 11 líneas, todas obligatorias</CardTitle>
+          <CardTitle className="text-base">Formato del DATOS.txt — {DATOS_OBLIGATORIAS} líneas obligatorias</CardTitle>
           <Button
             size="sm"
             variant="outline"
@@ -215,13 +215,15 @@ function DatosTxtGuide({ datos, onValidez }: { datos: File | null; onValidez: (o
                   <tr key={d.n} className="border-t">
                     <td className="w-8 py-1.5 pr-2 font-mono text-muted-foreground">{d.n}</td>
                     <td className="py-1.5 pr-3">
-                      <span className="font-medium text-foreground">{d.nombre}</span>
+                      <span className={d.opcional ? "text-muted-foreground" : "font-medium text-foreground"}>{d.nombre}</span>
                       {d.nota && <span className="block text-[11px] text-muted-foreground">{d.nota}</span>}
                     </td>
                     <td className="py-1.5 font-mono text-[11px] text-muted-foreground">
                       {cargado ? (
                         valor ? (
                           <span className="text-foreground">{d.n === 5 ? "••••••" : valor}</span>
+                        ) : d.opcional ? (
+                          <span className="opacity-60">—</span>
                         ) : (
                           <span className="text-destructive">falta</span>
                         )
@@ -329,7 +331,7 @@ function SetupStep({
             <span className="text-xl">📋</span>
             <div>
               <strong className="text-foreground">DATOS.txt</strong> — Créalo tú con un editor de texto: son{" "}
-              <strong className="text-foreground">11 líneas obligatorias</strong> (ver formato más abajo, con plantilla
+              <strong className="text-foreground">{DATOS_OBLIGATORIAS} líneas obligatorias</strong> (ver formato más abajo, con plantilla
               descargable). Incluye el número y fecha de resolución del SII.
             </div>
           </div>
@@ -524,7 +526,9 @@ function Etapa1Step({
           <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
             <CheckCircle2 className="h-5 w-5 text-green-600" />
             <div className="flex-1 text-sm text-green-800">
-              <strong>Archivos generados.</strong> Descarga el ZIP y sigue las instrucciones del portal.
+              <strong>Archivos generados.</strong> Descarga el ZIP y <strong>guárdalo</strong>: el EnvioDTE, los libros y
+              los PDFs de la Etapa 4 deben salir de <em>esta misma</em> descarga. Cada "Generar" firma de nuevo los
+              TED, y el SII rechaza PDFs cuya firma no coincida con el XML que aprobó.
             </div>
             <Button
               size="sm"
@@ -884,8 +888,9 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
           <p>• Set Básico: cada Factura (T33) en ejemplar tributario <strong>y</strong> cedible; NC (T61) y ND (T56) solo tributario.</p>
           <p>• Simulación: lo mismo para los DTEs de la Etapa 2.</p>
           <p className="mt-2 text-xs">
-            Sube los EnvioDTE XML que generaste en cada etapa (los mismos que aprobó el SII) y generamos todos los
-            PDFs con el barcode correcto.
+            Sube los EnvioDTE XML <strong>exactamente iguales a los que subiste al SII</strong> (del mismo ZIP). Si
+            regeneraste la Etapa 1 o 2 después de subirla, el TED cambió y el portal responde "Firma TED del timbre
+            no coincide con firma TED del XML".
           </p>
         </CardContent>
       </Card>
@@ -940,12 +945,13 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
             url="https://maullin.sii.cl"
             steps={[
               { text: "Entra a maullin.sii.cl → Certificación DTE → Muestras Impresas" },
-              { text: "Ingresa el RUT Empresa y el RUT Proveedor (mismo RUT en ambos campos si eres el emisor)" },
-              { text: "Arrastra o selecciona los 16 PDFs del ZIP descargado", highlight: true },
-              { text: "Haz clic en 'Enviar al SII' — verifica que todos muestren ✓ en Timbre, Caf y Ted" },
-              { text: "Si alguno muestra ✗, revisa el detalle del error en el portal", highlight: true },
+              { text: "RUT Empresa = la empresa que se certifica. RUT Proveedor = 78392059-K (PUDU TECNOLOGIA SPA, proveedor del software) — NO el receptor de prueba C&C SPA", highlight: true },
+              { text: "Arrastra o selecciona los PDFs del ZIP descargado (prueba + simulación)", highlight: true },
+              { text: "Verifica que los de prueba queden bajo 'PRUEBA' con su N° de caso y los de simulación bajo 'SIMULACIÓN', todos con ✓ en Timbre, Caf y Ted" },
+              { text: "Si una fila queda naranja ('no hay archivo PDF') o cae en el grupo equivocado, elimínala y vuelve a subir ese PDF", highlight: true },
+              { text: "Con los PDFs completos, 'Enviar al SII' inicia la Revisión; 'Rev. Func.' se llena después" },
             ]}
-            note="El portal valida el barcode PDF417 de cada DTE. Si aparece 'Ha habido alguna alteración en el CAF' significa que el TED tiene whitespace incorrecto — regenera los PDFs."
+            note="'Firma TED del timbre no coincide' = el PDF salió de una corrida distinta al XML aprobado (usa el ZIP original). 'Ha habido alguna alteración en el CAF' = whitespace en el TED — regenera los PDFs desde el XML."
           />
 
           <Results data={result} filename="etapa4_muestras.zip" />

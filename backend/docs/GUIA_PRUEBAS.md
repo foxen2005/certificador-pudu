@@ -31,6 +31,7 @@ Dirección de Origen                   ← Línea 8
 Comuna de Origen                      ← Línea 9
 Número de Resolución SII              ← Línea 10
 Fecha de Resolución (YYYY-MM-DD)      ← Línea 11
+Email de contacto                     ← Línea 12 (OPCIONAL: MailContacto en las respuestas de Etapa 3)
 ```
 
 **Ejemplo** (`docs/DATOS_ejemplo.txt`):

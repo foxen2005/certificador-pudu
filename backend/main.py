@@ -49,6 +49,9 @@ DATOS_LINEAS = [
     "Número de resolución SII (0 en certificación)",
     "Fecha de resolución (YYYY-MM-DD)",
 ]
+# Línea 12 (opcional): email de contacto → MailContacto en las respuestas de
+# Etapa 3 (RespuestaDTE / EnvioRecibos). Antes iba un correo inventado.
+_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _RUT_RE = _re.compile(r"^\d{7,8}-[\dkK]$")
 _FECHA_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -90,10 +93,14 @@ def _parse_datos(raw: bytes) -> dict:
             datetime.strptime(lineas[10], "%Y-%m-%d")
         except ValueError:
             errores.append(f"línea 11 ({DATOS_LINEAS[10]}): '{lineas[10]}' no es una fecha real")
+    email = lineas[11] if len(lineas) > 11 else ""
+    if email and not _EMAIL_RE.match(email):
+        errores.append(f"línea 12 (Email de contacto, opcional): '{email}' no es un correo válido")
     if errores:
         raise HTTPException(422, "DATOS.txt con errores → " + " · ".join(errores))
 
     return {
+        "email":        email,
         "nombre":       lineas[0],
         "rut_envia":    lineas[1].upper(),
         "razon_social": lineas[2],
@@ -721,7 +728,7 @@ async def etapa3_intercambio(
         "rut":       emisor_data["rut"],
         "rut_envia": emisor_data["rut_envia"],
         "nombre":    emisor_data["nombre"],
-        "email":     "contacto@empresa.cl",
+        "email":     emisor_data["email"],  # opcional (línea 12); si va vacío se omite MailContacto
         "_pfx_pass": emisor_data["pfx_password"],
     }
     pfx_bytes   = await pfx.read()
@@ -778,7 +785,8 @@ async def etapa3_intercambio(
         _etree.SubElement(CAR, "IdRespuesta").text  = "1"
         _etree.SubElement(CAR, "NroDetalles").text  = "1"
         _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
-        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        if dat["email"]:
+            _etree.SubElement(CAR, "MailContacto").text = dat["email"]
         _etree.SubElement(CAR, "TmstFirmaResp").text= ts
         RE = _etree.SubElement(RES, "RecepcionEnvio")
         _etree.SubElement(RE, "NmbEnvio").text      = nmbenvio
@@ -813,7 +821,8 @@ async def etapa3_intercambio(
         _etree.SubElement(CAR, "RutResponde").text  = dat["rut"]
         _etree.SubElement(CAR, "RutRecibe").text    = rut_emisor_set
         _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
-        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        if dat["email"]:
+            _etree.SubElement(CAR, "MailContacto").text = dat["email"]
         _etree.SubElement(CAR, "TmstFirmaEnv").text = ts
         decl = ("El acuse de recibo que se declara en este acto, de acuerdo a lo dispuesto "
                 "en la letra b) del Art. 4, y la letra c) del Art. 5 de la Ley 19.983, "
@@ -844,9 +853,10 @@ async def etapa3_intercambio(
         _etree.SubElement(CAR, "IdRespuesta").text  = "1"
         _etree.SubElement(CAR, "NroDetalles").text  = str(len(dtes_set))
         _etree.SubElement(CAR, "NmbContacto").text  = dat["nombre"]
-        _etree.SubElement(CAR, "MailContacto").text = dat["email"]
+        if dat["email"]:
+            _etree.SubElement(CAR, "MailContacto").text = dat["email"]
         _etree.SubElement(CAR, "TmstFirmaResp").text= ts
-        for i, d in enumerate(dtes_set, 1):
+        for d in dtes_set:
             es_nuestro = d["rut_recep"] == dat["rut"]
             RD = _etree.SubElement(RES, "ResultadoDTE")
             _etree.SubElement(RD, "TipoDTE").text      = d["tipo"]
@@ -855,7 +865,9 @@ async def etapa3_intercambio(
             _etree.SubElement(RD, "RUTEmisor").text    = d["rut_emisor"]
             _etree.SubElement(RD, "RUTRecep").text     = d["rut_recep"]
             _etree.SubElement(RD, "MntTotal").text     = d["mnt_total"]
-            _etree.SubElement(RD, "CodEnvio").text     = str(i)
+            # XSD: "Codigo de Identificacion del Envio en que se Recibio el DTE" —
+            # es el CodEnvio del RecepcionEnvio (1), no un correlativo por DTE.
+            _etree.SubElement(RD, "CodEnvio").text     = "1"
             _etree.SubElement(RD, "EstadoDTE").text    = "0" if es_nuestro else "2"
             _etree.SubElement(RD, "EstadoDTEGlosa").text = "ACEPTADO OK" if es_nuestro else "RECHAZADO"
         return _etree.tostring(R, xml_declaration=True, encoding="ISO-8859-1", pretty_print=True)

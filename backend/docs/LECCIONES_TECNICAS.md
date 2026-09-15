@@ -264,3 +264,30 @@ El descuadre es exactamente eso: resumen T61 positivo vs. detalles T61 negativos
 **Causa**: `/etapa3` invocaba `<raíz>/verify/firmar_respuesta_dte.js` y `firmar_envio_recibos.js`, que además hacían `require('d:/PUDU/SII_pudu_Server/src/signer')`. El Dockerfile empaqueta solo `backend/`, así que en producción no existían ni los scripts ni el signer. La Etapa 3 de PUDU pasó porque se corrió local.
 
 **Fix**: copias en `backend/builders/firmar_*.cjs` usando `./vendor/signer.js` (misma lógica de firma aprobada el 2026-05-18) y `@xmldom/xmldom` agregado a `backend/package.json`.
+
+---
+
+## 23. Muestras impresas: "Firma TED del timbre no coincide con firma TED del XML"
+
+**Error** (78460465-9, 2026-09-15): al subir los PDF de Etapa 1 al portal de Muestras Impresas, el SII crea la fila (Caso/Doc. de prueba) pero la deja **sin archivo** y al subir uno solo responde ese mensaje. Los 4 de simulación sí pasaban.
+
+**Causa**: cada "Generar" del wizard vuelve a firmar el TED con `TSTED` = hora actual → `FRMT` distinto aunque folios y montos sean iguales. El Set Básico aprobado (envío 258771808) salió de una corrida; los PDF, de otra posterior. El SII compara el `FRMT` del PDF417 con el del DTE que recibió.
+
+**Fix operativo**: los PDF de Etapa 4 deben generarse desde el **mismo** `EnvioDTE` que se subió (mismo ZIP). El wizard ahora lo avisa en Etapa 1 y Etapa 4. Si el ZIP se perdió, no hay forma de reconstruir la firma: hay que reenviar un Set Básico nuevo con folios nuevos y usar esa corrida para libros y PDF.
+
+**Mejora pendiente**: persistir cada corrida en un bucket (GCS) por RUT/fecha — el Cloud Run tiene disco efímero y cada deploy lo borra.
+
+**Además**, en la misma pantalla: *Rut Proveedor* = proveedor del software (78392059-K PUDU), no el receptor ficticio C&C SPA. Y las filas que quedan bajo SIMULACIÓN sin "Caso de Prueba" (Validación ✗) son duplicados de una fila PRUEBA ya existente: eliminar la fila sin archivo y resubir el PDF.
+
+---
+
+## 24. Alineación con el Manual de Muestras Impresas (revisión 2026-09-15)
+
+Contrastado `generator.py` con `Documentacion/manual_muestras_impresas.pdf` (§1.1–1.5) y `main.py /etapa3` con los XSD `RespuestaEnvioDTE_v10` / `EnvioRecibos_v10`:
+
+- §1.5: el rótulo "Timbre Electrónico SII" va **bajo** el timbre (el lector del SII lo usa para localizar el barcode) → antes iba al costado. Leyenda literal "Res. N de AAAA – Verifique documento: www.sii.cl".
+- §1.1.4: letras del recuadro ≥ 10 pt en negrita → la línea R.U.T. iba en 8 pt. Unidad SII ("S.I.I. – …") **bajo el recuadro**, no en la línea de la fecha.
+- XSD `ResultadoDTE/CodEnvio` = código del envío en que se recibió el DTE (el mismo `1` de `RecepcionEnvio`), no un correlativo por documento.
+- `MailContacto` es opcional en ambos esquemas: ahora sale de la línea 12 del DATOS.txt (opcional) y si no está, se omite (antes iba `contacto@empresa.cl` inventado).
+
+Ninguno de estos puntos fue rechazado por el SII en la certificación de PUDU (aprobó 16/16 y los 3 XML de intercambio), pero el manual es explícito y el revisor humano ("Rev. Func.") puede objetarlos.
