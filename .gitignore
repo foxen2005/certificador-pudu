@@ -40,3 +40,6 @@ mecanicas/
 # OS
 .DS_Store
 Thumbs.db
+
+# Build output (Cloudflare Workers)
+.output/

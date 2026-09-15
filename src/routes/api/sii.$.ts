@@ -4,7 +4,7 @@ import { getSiiBackendUrl } from "@/lib/sii-config";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Wizard-Key",
 };
 
 interface ServiceAccountKey {
@@ -109,9 +109,33 @@ async function resolveAuthToken(request: Request, backendUrl: string): Promise<s
   return staticToken || null;
 }
 
+// La UI pide la clave (WIZARD_PASSWORD) una vez en Configuración y la reenvía en
+// este header en cada llamada. Sin esta verificación el proxy firmaba un token
+// OIDC y reenviaba cualquier POST al Cloud Run a quien conociera la URL.
+const WIZARD_KEY_HEADER = "X-Wizard-Key";
+
+function claveValida(request: Request): boolean {
+  const expected = readSecret("WIZARD_PASSWORD");
+  if (!expected) return false;
+  const raw = request.headers.get(WIZARD_KEY_HEADER);
+  if (!raw) return false;
+  try {
+    return decodeURIComponent(raw) === expected; // la UI la manda URL-encoded
+  } catch {
+    return false;
+  }
+}
+
 async function proxy(request: Request, splat: string): Promise<Response> {
   const backend = getSiiBackendUrl().replace(/\/$/, "");
   const target = `${backend}/${splat}`;
+
+  if (!claveValida(request)) {
+    return new Response(
+      JSON.stringify({ detail: "Clave del wizard inválida o ausente. Vuelve a Configuración e ingresa la clave." }),
+      { status: 401, headers: { "Content-Type": "application/json", ...corsHeaders } },
+    );
+  }
 
   try {
     const token = await resolveAuthToken(request, backend);
@@ -120,6 +144,7 @@ async function proxy(request: Request, splat: string): Promise<Response> {
     const h = new Headers(request.headers);
     h.delete("host");
     h.delete("content-length");
+    h.delete(WIZARD_KEY_HEADER); // no reenviar la clave al backend
     if (token) h.set("Authorization", `Bearer ${token}`);
 
     const isBodyless = request.method === "GET" || request.method === "HEAD";

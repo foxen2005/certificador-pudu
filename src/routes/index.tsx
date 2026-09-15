@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { CheckCircle2, Circle, Loader2, Download, AlertCircle, ChevronRight, Lock } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle2, Loader2, Download, AlertCircle, ChevronRight, Lock, FileDown } from "lucide-react";
+import { DATOS_LINEAS, decodificarDatos, plantillaDatosTxt, validarDatosTxt } from "@/lib/datos-txt";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -58,8 +59,14 @@ function formatDetail(detail: unknown): string {
   return String(detail);
 }
 
-async function postForm(path: string, fd: FormData) {
-  const res = await fetch(path, { method: "POST", body: fd });
+// Header que el proxy /api/sii/* valida contra WIZARD_PASSWORD. Sin esto, cualquiera
+// que conociera la URL podía usar el backend (la clave solo protegía la UI).
+const WIZARD_KEY_HEADER = "X-Wizard-Key";
+
+async function postForm(path: string, fd: FormData, clave: string) {
+  // encodeURIComponent: los headers HTTP solo admiten Latin-1; una clave con
+  // "€", "—" o emoji haría fallar fetch(). El proxy la decodifica.
+  const res = await fetch(path, { method: "POST", body: fd, headers: { [WIZARD_KEY_HEADER]: encodeURIComponent(clave) } });
   const ct = res.headers.get("content-type") ?? "";
   const data = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) {
@@ -72,15 +79,19 @@ async function postForm(path: string, fd: FormData) {
   return data;
 }
 
-function downloadB64(b64: string, filename: string) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length).map((_, i) => bin.charCodeAt(i));
-  const url = URL.createObjectURL(new Blob([bytes]));
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadB64(b64: string, filename: string) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length).map((_, i) => bin.charCodeAt(i));
+  downloadBlob(new Blob([bytes]), filename);
 }
 
 // ─── Step indicator sidebar ───────────────────────────────────────────────────
@@ -147,20 +158,127 @@ function Stepper({
 
 // ─── Individual step panels ───────────────────────────────────────────────────
 
+function DatosTxtGuide({ datos, onValidez }: { datos: File | null; onValidez: (ok: boolean) => void }) {
+  const [errores, setErrores] = useState<string[] | null>(null);
+  const [lineas, setLineas] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!datos) {
+      setErrores(null);
+      setLineas([]);
+      onValidez(false);
+      return;
+    }
+    let cancelado = false;
+    datos.arrayBuffer().then((buf) => {
+      if (cancelado) return;
+      const v = validarDatosTxt(decodificarDatos(buf));
+      setErrores(v.errores);
+      setLineas(v.lineas);
+      onValidez(v.errores.length === 0);
+    });
+    return () => {
+      cancelado = true;
+    };
+    // onValidez es un setter de estado estable del padre
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datos]);
+
+  const ok = errores !== null && errores.length === 0;
+
+  return (
+    <Card className={ok ? "border-green-200" : errores?.length ? "border-destructive/40" : ""}>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">Formato del DATOS.txt — 11 líneas, todas obligatorias</CardTitle>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => downloadBlob(new Blob([plantillaDatosTxt()], { type: "text/plain;charset=utf-8" }), "DATOS.txt")}
+          >
+            <FileDown className="mr-1 h-4 w-4" /> Descargar plantilla
+          </Button>
+        </div>
+        <CardDescription>
+          Un dato por línea, en este orden exacto, sin líneas vacías intermedias. Las líneas 10 y 11 son las que el
+          SII revisa en la carátula: si faltan, rechaza el envío con <code className="rounded bg-muted px-1">CRT-3-19 Fecha/Numero Resolucion Invalido</code>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <tbody>
+              {DATOS_LINEAS.map((d) => {
+                const valor = lineas[d.n - 1];
+                const cargado = errores !== null;
+                return (
+                  <tr key={d.n} className="border-t">
+                    <td className="w-8 py-1.5 pr-2 font-mono text-muted-foreground">{d.n}</td>
+                    <td className="py-1.5 pr-3">
+                      <span className="font-medium text-foreground">{d.nombre}</span>
+                      {d.nota && <span className="block text-[11px] text-muted-foreground">{d.nota}</span>}
+                    </td>
+                    <td className="py-1.5 font-mono text-[11px] text-muted-foreground">
+                      {cargado ? (
+                        valor ? (
+                          <span className="text-foreground">{d.n === 5 ? "••••••" : valor}</span>
+                        ) : (
+                          <span className="text-destructive">falta</span>
+                        )
+                      ) : (
+                        <span className="opacity-70">{d.ejemplo}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          La fecha de resolución se consulta en <em>maullin.sii.cl → Mi SII → datos de la empresa</em> (ambiente de
+          certificación). Guarda el archivo como texto plano (UTF-8 o ANSI).
+        </p>
+
+        {errores && errores.length > 0 && (
+          <Alert variant="destructive" className="mt-3">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <p className="font-semibold">Corrige el DATOS.txt antes de continuar:</p>
+              <ul className="mt-1 list-disc pl-4">
+                {errores.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+        {ok && (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-green-700">
+            <CheckCircle2 className="h-4 w-4" /> DATOS.txt válido — {lineas[2]} ({lineas[3]}), resolución N° {lineas[9]} del {lineas[10]}.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SetupStep({
   onDone,
 }: {
-  onDone: (files: { pfx: File; datos: File; cafs: Record<string, File> }) => void;
+  onDone: (files: SharedFiles) => void;
 }) {
   const [pfx, setPfx] = useState<File | null>(null);
   const [datos, setDatos] = useState<File | null>(null);
+  const [datosOk, setDatosOk] = useState(false);
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
   const [caf46, setCaf46] = useState<File | null>(null);
   const [claveError, setClaveError] = useState(false);
 
-  const ready = !!pfx && !!datos && !!(caf33 || caf56 || caf61 || caf46);
+  const ready = !!pfx && !!datos && datosOk && !!(caf33 || caf56 || caf61 || caf46);
 
   async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
@@ -181,7 +299,7 @@ function SetupStep({
       return;
     }
     setClaveError(false);
-    onDone({ pfx: pfx!, datos: datos!, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(caf46 && { "46": caf46 }) } });
+    onDone({ pfx: pfx!, datos: datos!, clave, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(caf46 && { "46": caf46 }) } });
   }
 
   return (
@@ -210,10 +328,9 @@ function SetupStep({
           <div className="flex gap-3">
             <span className="text-xl">📋</span>
             <div>
-              <strong className="text-foreground">DATOS.txt</strong> — Créalo tú. Cada línea tiene un dato:
-              <code className="ml-1 rounded bg-muted px-1 text-xs">
-                nombre_rep · rut_rep · razón_social · rut_empresa · clave_pfx
-              </code>
+              <strong className="text-foreground">DATOS.txt</strong> — Créalo tú con un editor de texto: son{" "}
+              <strong className="text-foreground">11 líneas obligatorias</strong> (ver formato más abajo, con plantilla
+              descargable). Incluye el número y fecha de resolución del SII.
             </div>
           </div>
           <div className="flex gap-3">
@@ -229,8 +346,10 @@ function SetupStep({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <UploadBox label="Certificado .pfx / .p12" hint="Firma digital del representante legal" icon="🔑" accept=".pfx,.p12" file={pfx} onChange={setPfx} />
-        <UploadBox label="DATOS.txt" hint="Línea 1: nombre rep · 2: rut_rep · 3: razón social · 4: rut empresa · 5: clave PFX" icon="👤" accept=".txt" file={datos} onChange={setDatos} />
+        <UploadBox label="DATOS.txt" hint="11 líneas: representante, empresa, clave PFX, giro, acteco, dirección, comuna, N° y fecha de resolución" icon="👤" accept=".txt" file={datos} onChange={setDatos} />
       </div>
+
+      <DatosTxtGuide datos={datos} onValidez={setDatosOk} />
 
       <div>
         <p className="mb-2 text-sm font-medium">Archivos CAF (uno por tipo de documento)</p>
@@ -258,6 +377,7 @@ interface SharedFiles {
   pfx: File;
   datos: File;
   cafs: Record<string, File>;
+  clave: string;
 }
 
 function Etapa1Step({
@@ -296,7 +416,7 @@ function Etapa1Step({
       for (const [tipo, folio] of Object.entries(foliosIni)) {
         if (folio.trim()) fd.append(`folio_inicial_${tipo}`, folio.trim());
       }
-      const data = await postForm("/api/sii/certificar", fd) as BatchResult;
+      const data = await postForm("/api/sii/certificar", fd, shared.clave) as BatchResult;
       setResult(data);
       onDone(data);
     } catch (e) {
@@ -367,8 +487,8 @@ function Etapa1Step({
         <div>
           <p className="mb-1 text-sm font-medium">Folio inicial por tipo (opcional)</p>
           <p className="mb-2 text-xs text-muted-foreground">
-            Si un folio ya se usó en un envío previo, indica desde qué folio empezar para no repetirlo.
-            En blanco = usa el primer folio disponible del CAF.
+            Si un folio ya se usó en un envío previo (aunque el SII lo haya rechazado), indica desde qué folio
+            empezar: el SII rechaza folios repetidos con DTE-3-100. En blanco = primer folio del CAF.
           </p>
           <div className="grid gap-3 sm:grid-cols-4">
             {Object.keys(shared.cafs).sort().map(tipo => (
@@ -443,6 +563,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
+  const [folio33, setFolio33] = useState("");
   const [folio46, setFolio46] = useState("");
   const [folio61, setFolio61] = useState("");
   const [folio56, setFolio56] = useState("");
@@ -460,19 +581,20 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       fd.append("datos", shared.datos);
       fd.append("pfx", shared.pfx);
       fd.append("modo", modo);
+      // Los folios van SIEMPRE (ambos modos): sin ellos el backend arranca en el
+      // primer folio del CAF, que ya se consumió en Etapa 1 → DTE-3-100 repetido.
       if (modo === "compra") {
         if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
-        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
-        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
         if (folio46.trim()) fd.append("folio_46", folio46.trim());
-        if (folio61.trim()) fd.append("folio_61", folio61.trim());
-        if (folio56.trim()) fd.append("folio_56", folio56.trim());
       } else {
         if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
-        if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
-        if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+        if (folio33.trim()) fd.append("folio_33", folio33.trim());
       }
-      const data = await postForm("/api/sii/etapa2", fd) as BatchResult;
+      if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
+      if (folio61.trim()) fd.append("folio_61", folio61.trim());
+      if (folio56.trim()) fd.append("folio_56", folio56.trim());
+      const data = await postForm("/api/sii/etapa2", fd, shared.clave) as BatchResult;
       setResult(data);
       onDone();
     } catch (e) {
@@ -532,23 +654,31 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
         </CardContent>
       </Card>
 
-      {modo === "compra" && (
-        <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
+      <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
+        {modo === "compra" ? (
           <div className="space-y-1">
             <Label htmlFor="folio-46-sim">Folio T46 — Factura de Compra</Label>
-            <Input id="folio-46-sim" type="number" min="1" placeholder="auto (CAF)" value={folio46} onChange={e => setFolio46(e.target.value)} />
+            <Input id="folio-46-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio46} onChange={e => setFolio46(e.target.value)} />
           </div>
+        ) : (
           <div className="space-y-1">
-            <Label htmlFor="folio-61-sim">Folio T61 — Nota de Crédito</Label>
-            <Input id="folio-61-sim" type="number" min="1" placeholder="auto (CAF)" value={folio61} onChange={e => setFolio61(e.target.value)} />
+            <Label htmlFor="folio-33-sim">Folio T33 — Factura</Label>
+            <Input id="folio-33-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio33} onChange={e => setFolio33(e.target.value)} />
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="folio-56-sim">Folio T56 — Nota de Débito</Label>
-            <Input id="folio-56-sim" type="number" min="1" placeholder="auto (CAF)" value={folio56} onChange={e => setFolio56(e.target.value)} />
-          </div>
-          <p className="text-xs text-muted-foreground sm:col-span-3">Folio opcional por documento. Si ya usaste alguno en otra etapa, indica uno nuevo para no repetirlo.</p>
+        )}
+        <div className="space-y-1">
+          <Label htmlFor="folio-61-sim">Folio T61 — Nota de Crédito</Label>
+          <Input id="folio-61-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio61} onChange={e => setFolio61(e.target.value)} />
         </div>
-      )}
+        <div className="space-y-1">
+          <Label htmlFor="folio-56-sim">Folio T56 — Nota de Débito</Label>
+          <Input id="folio-56-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio56} onChange={e => setFolio56(e.target.value)} />
+        </div>
+        <p className="text-xs text-muted-foreground sm:col-span-3">
+          ⚠️ Usa folios que <strong>no</strong> hayas enviado en la Etapa 1 (ni en envíos rechazados): el SII rechaza
+          folios repetidos con DTE-3-100. En blanco se usa el primer folio del CAF, que normalmente ya está consumido.
+        </p>
+      </div>
 
       {!listo && (
         <Alert>
@@ -604,10 +734,8 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Etapa3Step({ onDone }: { onDone: () => void }) {
+function Etapa3Step({ shared, onDone }: { shared: SharedFiles; onDone: () => void }) {
   const [setXml, setSetXml] = useState<File | null>(null);
-  const [pfx, setPfx] = useState<File | null>(null);
-  const [datos, setDatos] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
@@ -618,9 +746,10 @@ function Etapa3Step({ onDone }: { onDone: () => void }) {
     try {
       const fd = new FormData();
       fd.append("set_intercambio", setXml!);
-      fd.append("pfx", pfx!);
-      fd.append("datos", datos!);
-      const data = await postForm("/api/sii/etapa3", fd) as BatchResult;
+      // Certificado y DATOS.txt ya validados en Configuración — no se piden de nuevo.
+      fd.append("pfx", shared.pfx);
+      fd.append("datos", shared.datos);
+      const data = await postForm("/api/sii/etapa3", fd, shared.clave) as BatchResult;
       setResult(data);
       onDone();
     } catch (e) {
@@ -653,7 +782,7 @@ function Etapa3Step({ onDone }: { onDone: () => void }) {
         note="Cada descarga crea un nuevo N° Atención. El SII valida contra el último. Siempre usa el archivo más reciente."
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         <UploadBox
           label="ENVIO_DTE_*.xml"
           hint="SET recibido del SII — usar el último descargado"
@@ -662,11 +791,14 @@ function Etapa3Step({ onDone }: { onDone: () => void }) {
           file={setXml}
           onChange={setSetXml}
         />
-        <UploadBox label="Certificado .pfx / .p12" hint="Firma digital" icon="🔑" accept=".pfx,.p12" file={pfx} onChange={setPfx} />
-        <UploadBox label="DATOS.txt" hint="Datos de la empresa" icon="👤" accept=".txt" file={datos} onChange={setDatos} />
+        <div className="rounded-lg border bg-muted/30 p-4 text-xs text-muted-foreground">
+          <p className="font-semibold text-foreground">Se firma con lo cargado en Configuración</p>
+          <p className="mt-1">🔑 {shared.pfx.name}</p>
+          <p>👤 {shared.datos.name}</p>
+        </div>
       </div>
 
-      <Button size="lg" disabled={!setXml || !pfx || !datos || loading} onClick={generate}>
+      <Button size="lg" disabled={!setXml || loading} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando respuestas…</>
           : "Generar 3 XMLs de Respuesta"}
@@ -726,7 +858,7 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
       const fd = new FormData();
       if (xml1) fd.append("envio_basico", xml1);
       if (xml2) fd.append("envio_simulacion", xml2);
-      const data = await postForm("/api/sii/etapa4", fd) as BatchResult;
+      const data = await postForm("/api/sii/etapa4", fd, shared.clave) as BatchResult;
       setResult(data);
     } catch (e) {
       setError((e as Error).message);
@@ -742,17 +874,18 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
         <p className="mt-1 text-sm text-muted-foreground">
           Debes subir al portal un <strong>PDF por cada DTE</strong> de las Etapas 1 y 2.
           El SII valida que el barcode PDF417 tenga el TED correcto (firma válida, CAF íntegro).
-          En total son <strong>16 PDFs</strong>: 12 del Set Básico + 4 de la Simulación.
+          Para un set básico típico (4 T33 + 3 T61 + 1 T56) más la simulación son <strong>16 PDFs</strong>.
         </p>
       </div>
 
       <Card className="border-blue-100 bg-blue-50">
         <CardContent className="pt-4 text-sm text-blue-800 space-y-1">
           <p className="font-semibold">¿Qué PDFs necesitas?</p>
-          <p>• Set Básico: T33 F33-36 (×2 tributaria+cedible), T61 F25-27, T56 F9 → <strong>12 PDFs</strong></p>
-          <p>• Simulación: T33 F37 (×2), T61 F28, T56 F10 → <strong>4 PDFs</strong></p>
+          <p>• Set Básico: cada Factura (T33) en ejemplar tributario <strong>y</strong> cedible; NC (T61) y ND (T56) solo tributario.</p>
+          <p>• Simulación: lo mismo para los DTEs de la Etapa 2.</p>
           <p className="mt-2 text-xs">
-            Sube los EnvioDTE XML de cada etapa y generamos todos los PDFs con el barcode correcto.
+            Sube los EnvioDTE XML que generaste en cada etapa (los mismos que aprobó el SII) y generamos todos los
+            PDFs con el barcode correcto.
           </p>
         </CardContent>
       </Card>
@@ -779,7 +912,7 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
       <Button size="lg" disabled={(!xml1 && !xml2) || loading} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando PDFs…</>
-          : "Generar 16 PDFs"}
+          : "Generar PDFs de muestra"}
       </Button>
 
       {error && (
@@ -798,7 +931,7 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
             </div>
             <Button size="sm" variant="outline" className="border-green-400 text-green-700 hover:bg-green-100"
               onClick={() => downloadB64(result.zip_base64 ?? "", "etapa4_muestras.zip")}>
-              <Download className="mr-1 h-4 w-4" /> Descargar 16 PDFs
+              <Download className="mr-1 h-4 w-4" /> Descargar {result.pdfs_generados ?? ""} PDFs
             </Button>
           </div>
 
@@ -924,8 +1057,9 @@ function CertWizard() {
               }}
             />
           )}
-          {current === "etapa3" && (
+          {current === "etapa3" && shared && (
             <Etapa3Step
+              shared={shared}
               onDone={() => {
                 markDone("etapa3", "etapa4");
                 unlock("etapa4");

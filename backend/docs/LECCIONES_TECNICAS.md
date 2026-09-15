@@ -71,7 +71,9 @@ Fuente: `SII_pudu_Server/server.js:757`
 - T61 aparece como TpoDoc con TotMntTotal negativo en el resumen → LBR-2 no admite negativo en TpoDoc
 - TotMntExe/Neto/IVA/Total del ResumenPeriodo descuadrado cuando se suman T61 con negativos
 
-**Fix**: En el Libro, las NCs (T61) deben tener sus montos como NEGATIVOS en los campos de monto, pero el campo TpoDoc del resumen debe mostrar el tipo con el valor absoluto (o con la estructura correcta que el SII espera).
+**Fix**: En el LibroCV **todos** los montos van en POSITIVO, también los de las NC (T61): el `TpoDoc=61` ya indica que restan. Los negativos solo se admiten en liquidaciones (TpoDoc 40/43/103). Evidencia: `output/certificacion_20260517_2009/LibroVentas_78392059K.xml` (LOK/LTC) tiene los `Detalle` T61 con `MntNeto`/`MntIVA`/`MntTotal` positivos y el resumen T61 cuadra con esa suma.
+
+> ⚠️ Una versión anterior de esta lección decía lo contrario ("las NC deben ir NEGATIVAS") y `build_libro_ventas()` en `libro_builder.py` lo implementaba así → ver lección 20.
 
 ---
 
@@ -226,3 +228,39 @@ root = etree.fromstring(xml_bytes, etree.XMLParser(encoding="iso-8859-1"))
 2. Excluir además cualquier documento con `Monto Total: $0` — una NC/ND con CodRef=2 nunca debe llevar tasa de IVA explícita, sin importar el tipo de documento referenciado.
 
 **Cómo se encontró**: probando `/certificar` end-to-end contra el set real después de un merge grande — bajó de 12/12 a 11/12 aprobados. Sirve de recordatorio: cualquier cambio a `validator.py` debe probarse contra el set completo (incluye casos CodRef=2), no solo contra un DTE con montos simples.
+
+---
+
+## 20. LibroVentas LRH desde el wizard — `main.py` usaba un builder distinto al certificado
+
+**Error** (RUT 78460465-9, envío 258773014, 2026-09-14): `LRH - Envio de Libro Rechazado - Descuadrado` con
+`LBR-3 Resumen No Cuadra Con Informacion de Detalle [Tipo Doc:61 - TotMntExe/TotMntIVA/TotMntTotal/TotMntNeto]`
+y `LBR-2 Reparo en Calculo de [TpoDoc] debe ser [40, 43, 103] T:[61]`.
+
+**Causa**: `libro_builder.py` tenía DOS implementaciones del libro de ventas:
+- `build_unsigned_libro_ventas()` — montos positivos, usada por `test_certificacion.py` → la que produjo el libro LOK de PUDU.
+- `build_libro_ventas()` — copia con las NC en NEGATIVO en el `Detalle` (resumen en positivo), usada por **`main.py` (el wizard)**. Nunca se probó contra el SII porque la certificación de PUDU se corrió con el script, no con la web.
+
+El descuadre es exactamente eso: resumen T61 positivo vs. detalles T61 negativos; y los negativos disparan el LBR-2 de liquidaciones.
+
+**Fix**: `build_libro_ventas()` y `build_libro_compras()` ahora delegan en las funciones `build_unsigned_*` (única fuente) con `fecha_doc="2000-01-01"` para el periodo pre-RCV. De paso se corrigió `build_libro_compras()`, que pasaba el timestamp actual (periodo = mes actual, no `2000-01`) — camino a un `CRT-3 Periodo invalido`.
+
+**Regla**: cualquier función que genere XML para el SII debe tener UNA implementación; los scripts de prueba y el wizard llaman a la misma.
+
+---
+
+## 21. DATOS.txt de 5 líneas → CRT-3-19 "Fecha/Numero Resolucion Invalido"
+
+**Error** (RUT 78460465-9, 2026-09-14): EnvioDTE rechazado con `CRT-3-19`.
+
+**Causa**: `main.py` aceptaba un DATOS.txt de 5 líneas y rellenaba en silencio `NroResol=0` y `FchResol=<hoy>`. La propia web decía "5 líneas". El SII exige en la carátula el N° y fecha de resolución **publicados en los datos de la empresa en el ambiente de certificación** (Manual SII, sección "Envío del Set de Pruebas"): N° = 0 en certificación, fecha ≠ hoy.
+
+**Fix**: `_parse_datos()` en `main.py` exige las 11 líneas y valida RUT/número/fecha (422 con el nombre de la línea que falta); la web muestra el formato completo, valida el archivo al cargarlo y ofrece una plantilla. El archivo se decodifica como UTF-8 si es válido y como ISO-8859-1 si no (antes un DATOS.txt en UTF-8 con acentos salía con mojibake en el XML).
+
+---
+
+## 22. Etapa 3 daba 500 en Cloud Run — scripts fuera del contexto Docker
+
+**Causa**: `/etapa3` invocaba `<raíz>/verify/firmar_respuesta_dte.js` y `firmar_envio_recibos.js`, que además hacían `require('d:/PUDU/SII_pudu_Server/src/signer')`. El Dockerfile empaqueta solo `backend/`, así que en producción no existían ni los scripts ni el signer. La Etapa 3 de PUDU pasó porque se corrió local.
+
+**Fix**: copias en `backend/builders/firmar_*.cjs` usando `./vendor/signer.js` (misma lógica de firma aprobada el 2026-05-18) y `@xmldom/xmldom` agregado a `backend/package.json`.

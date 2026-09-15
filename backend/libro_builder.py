@@ -11,10 +11,9 @@ from builders.common import sign_via_pudu
 
 NS_LCV = "http://www.sii.cl/SiiDte"
 
-# Tipos que van en libro de ventas
+# Tipos que van en libro de ventas. Las NC (61) van en POSITIVO igual que el
+# resto — el TpoDoc ya indica que restan; negativos → LBR-2.
 _VENTAS_TIPOS = {33, 34, 52, 56, 61, 43, 46}
-# Notas de Crédito invierten el signo en el libro
-_NC_TIPOS = {61}
 
 # Para libros ESPECIAL de certificación: usar periodo pre-RCV (RCV reemplaza
 # libros a partir de 2017-08). Si se usa periodo actual, el SII rechaza con
@@ -172,9 +171,14 @@ def build_unsigned_libro_ventas(
     emisor_data: dict,
     timestamp: str,
     nro_atencion: str,
+    fecha_doc: str | None = None,
 ) -> bytes:
-    """Genera LibroVentas XML SIN firma. El firmado lo hace Node.js/signer.js."""
-    fecha = timestamp[:10]
+    """Genera LibroVentas XML SIN firma. El firmado lo hace Node.js/signer.js.
+
+    `fecha_doc` fija FchDoc/PeriodoTributario (ej. "2000-01-01" para libros
+    ESPECIAL de certificación); si es None se derivan de `timestamp`.
+    """
+    fecha = fecha_doc or timestamp[:10]
     periodo = fecha[:7]
     envio_id = "LibroVentas"
 
@@ -230,9 +234,15 @@ def build_unsigned_libro_compras(
     timestamp: str,
     nro_atencion: str,
     fct_prop: float = 0.6,
+    fecha_doc: str | None = None,
 ) -> bytes:
-    """Genera LibroCompras XML SIN firma. El firmado lo hace Node.js/signer.js."""
-    fecha = timestamp[:10]
+    """Genera LibroCompras XML SIN firma. El firmado lo hace Node.js/signer.js.
+
+    `fecha_doc` fija FchDoc/PeriodoTributario de TODOS los detalles (ignora la
+    FECHA del set) — necesario en certificación ESPECIAL, donde el periodo es
+    pre-RCV (2000-01) y una fecha fuera del periodo descuadra el libro.
+    """
+    fecha = fecha_doc or timestamp[:10]
     periodo = fecha[:7]
     envio_id = "LibroCompras"
 
@@ -307,7 +317,7 @@ def build_unsigned_libro_compras(
 
         detalles.append({
             "tipo": tipo_cod, "folio": item.folio,
-            "fecha": item.fecha or fecha,
+            "fecha": fecha_doc or item.fecha or fecha,
             "rut_doc": item.rut_emisor or "00000000-0",
             "razon_social": item.razon_social or "",
             "neto": neto, "iva": iva, "exento": exento, "total": total,
@@ -357,67 +367,22 @@ def build_libro_ventas(
     timestamp: str,
     nro_atencion: str,
 ) -> bytes:
-    """Genera LibroVentas XML firmado para el Set de Pruebas SII."""
-    fecha = LIBRO_FCHDOC_VENTAS  # FchDoc en detalles debe estar dentro del periodo
-    periodo = LIBRO_PERIODO_VENTAS
-    envio_id = "LibroVentas"
+    """Genera LibroVentas XML firmado para el Set de Pruebas SII (periodo pre-RCV).
 
-    ROOT, ENVIO = _make_root(envio_id, "LibroCV_v10.xsd")
-    _add_caratula(ENVIO, emisor_data, "VENTA", periodo, nro_atencion)
-
-    totales: dict[int, dict] = defaultdict(lambda: {"count": 0, "neto": 0, "iva": 0, "exento": 0, "total": 0})
-    detalles = []
-
-    for caso in casos:
-        if caso.tipo_doc not in _VENTAS_TIPOS:
-            continue
-        folio = folios_ref.get(caso.numero, 1)
-        tots = calc_totales(caso.items, caso.descuento_global_pct)
-
-        neto = tots["neto"] or 0
-        iva = tots["iva"] or 0
-        exento = tots["exento"] or 0
-        total = tots["total"] or 0
-
-        # ResumenPeriodo acumula valores absolutos (positivos) para todos los tipos,
-        # incluidas NCs. El SII espera positivos en TotalesPeriodo.
-        t = totales[caso.tipo_doc]
-        t["count"] += 1
-        t["neto"] += neto
-        t["iva"] += iva
-        t["exento"] += exento
-        t["total"] += total
-
-        # Detalle usa signo negativo para NC (representa reducción de débito fiscal)
-        if caso.tipo_doc in _NC_TIPOS:
-            neto, iva, exento, total = -neto, -iva, -exento, -total
-
-        detalles.append({
-            "tipo": caso.tipo_doc,
-            "folio": folio,
-            "fecha": fecha,
-            "rut_doc": receptor["rut"],
-            "razon_social": receptor["razon_social"],
-            "neto": neto,
-            "iva": iva,
-            "exento": exento,
-            "total": total,
-        })
-
-    _add_resumen(ENVIO, totales)
-    for d in detalles:
-        _add_detalle(ENVIO, d)
-
-    etree.SubElement(ENVIO, "TmstFirma").text = timestamp
-
-    _add_newlines(ROOT)
-    unsigned_xml = etree.tostring(ROOT, xml_declaration=True, encoding="ISO-8859-1")
-    unsigned_xml = unsigned_xml.replace(
-        b"<?xml version='1.0' encoding='ISO-8859-1'?>",
-        b'<?xml version="1.0" encoding="ISO-8859-1"?>'
+    Delega en `build_unsigned_libro_ventas` — la misma función que produjo el
+    libro LOK/LTC de PUDU (output/certificacion_20260517_2009). Antes esta
+    función tenía una copia propia que ponía las NC (T61) con montos NEGATIVOS
+    en el Detalle → el SII rechazaba con LRH: LBR-3 "Resumen no cuadra" (el
+    resumen iba en positivo) + LBR-2 "[TpoDoc] debe ser [40, 43, 103]" (los
+    negativos solo se admiten en liquidaciones). Caso real: 78460465-9,
+    envío 258773014, 2026-09-14. En el LibroCV las NC van en POSITIVO; el
+    TpoDoc=61 ya indica que restan.
+    """
+    unsigned_xml = build_unsigned_libro_ventas(
+        casos, folios_ref, receptor, emisor_data, timestamp, nro_atencion,
+        fecha_doc=LIBRO_FCHDOC_VENTAS,
     )
-
-    return _sign_libro_via_pudu(unsigned_xml, envio_id, pfx_bytes, pfx_password)
+    return _sign_libro_via_pudu(unsigned_xml, "LibroVentas", pfx_bytes, pfx_password)
 
 
 # ─── Libro de Compras ─────────────────────────────────────────────────────────
@@ -432,12 +397,15 @@ def build_libro_compras(
     nro_atencion: str,
     fct_prop: float = 0.6,
 ) -> bytes:
-    """Genera LibroCompras XML firmado para el Set de Pruebas SII."""
-    fecha = LIBRO_FCHDOC_COMPRAS
-    periodo = LIBRO_PERIODO_COMPRAS
-    envio_id = "LibroCompras"
+    """Genera LibroCompras XML firmado para el Set de Pruebas SII (periodo pre-RCV).
 
+    Antes se pasaba `timestamp` (hoy) sin `fecha_doc`, así que el periodo y los
+    FchDoc salían con la fecha actual y no con 2000-01 (CRT-3 "Periodo invalido",
+    ver LECCIONES_TECNICAS). Mismo patrón que test_certificacion.py, que fue el
+    que generó el libro LTC aprobado de PUDU.
+    """
     unsigned_xml = build_unsigned_libro_compras(
-        items, emisor_data, timestamp, nro_atencion, fct_prop=fct_prop
+        items, emisor_data, timestamp, nro_atencion, fct_prop=fct_prop,
+        fecha_doc=LIBRO_FCHDOC_COMPRAS,
     )
-    return _sign_libro_via_pudu(unsigned_xml, envio_id, pfx_bytes, pfx_password)
+    return _sign_libro_via_pudu(unsigned_xml, "LibroCompras", pfx_bytes, pfx_password)

@@ -37,19 +37,23 @@ Fecha de Resolución (YYYY-MM-DD)      ← Línea 11
 
 ```
 Juan Pérez González
-12345678-9
+11111111-1
 EMPRESA TEST LTDA
-76543210-K
+76543210-3
 clave_pfx_aqui
 VENTA AL POR MENOR DE COMPUTADORES Y EQUIPOS
 471001
 Av. Providencia 1234 Of. 501
 Providencia
-100
-2018-01-18
+0
+2026-05-05
 ```
 
-> **Nota:** La Fecha y Número de Resolución son los que entregó el SII cuando autorizó tu empresa para facturar electrónicamente. Si tienes resolución tipo "Exento" usa `0` como número y la fecha correspondiente.
+> **Las 11 líneas son obligatorias.** El backend rechaza con `422` cualquier archivo con menos líneas o con RUT/fecha mal formados, y la web valida el archivo al cargarlo. Antes se rellenaban las líneas faltantes en silencio (`NroResol=0`, `FchResol=hoy`) y el SII respondía `CRT-3-19 Fecha/Numero Resolucion Invalido`.
+>
+> **Número y fecha de resolución (líneas 10-11)** — según el Manual SII ("Envío del Set de Pruebas"): *"Indique el número y fecha que está publicado en los datos de su empresa en el ambiente de certificación"*. En certificación el número es **siempre `0`**; la fecha es la que aparece en *maullin.sii.cl → Mi SII → datos de la empresa* (la fecha en que el SII habilitó a la empresa para certificar), **no la fecha de hoy**. Si la empresa ya es emisor electrónico, usar el número y fecha reales de su resolución.
+>
+> Guardar como texto plano; se acepta UTF-8 o ANSI (ISO-8859-1). No dejar líneas vacías entre medio: el parser las descarta y todo se corre una posición.
 
 ---
 
@@ -267,6 +271,10 @@ Cuando el endpoint `/certificar` retorne `"rechazados": 0`, verifica:
 | `CAF para tipo 33 sin folios disponibles` | El CAF solo tiene 1 folio y el set pide 2 T33 | Solicita un CAF con más folios |
 | PDF con `"aprobado": false` | PDF no cumple algún check | Revisa el detalle de `checks` en la respuesta |
 | `422` en `/certificar` | Archivo faltante o formato incorrecto | Lee el mensaje de error en el campo `detail` |
+| `DATOS.txt tiene N línea(s) y necesita 11` | DATOS.txt incompleto | Completa las líneas que nombra el mensaje (ver formato arriba) |
+| `El CAF T33 pertenece al RUT X pero DATOS.txt dice Y` | CAF de otra empresa o RUT mal escrito en línea 4 | Corrige la línea 4 o sube el CAF correcto |
+| `CRT-3-19 Fecha/Numero Resolucion Invalido` (SII) | Líneas 10-11 con valores que no coinciden con los publicados en maullin | Ver nota sobre resolución arriba |
+| `LRH ... LBR-3 Resumen No Cuadra ... Tipo Doc:61` (SII) | Versión vieja del libro con NC en negativo | Corregido en v1.6.0 — regenerar con folios nuevos |
 
 ---
 

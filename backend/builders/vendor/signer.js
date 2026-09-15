@@ -106,6 +106,32 @@ function parseCertificate(p12Buffer, password) {
   }
   // Certs chilenos a veces ponen el RUT con prefijo "CL-" o embebido en el CN
   if (rut && rut.startsWith('CL-')) rut = rut.slice(3);
+
+  // Sincronizado con SII_pudu_Server (14-08-2026): E-CertChile, Acepta, etc. ponen
+  // el RUT en subjectAltName (otherName OID 1.3.6.1.4.1.8321.1) y no en serialNumber.
+  if (!rut) {
+    const san = certificate.extensions?.find(e => e.name === 'subjectAltName');
+    if (san && Array.isArray(san.altNames)) {
+      const buscarRutEnAsn1 = (node) => {
+        if (!node) return null;
+        if (typeof node.value === 'string' && /^\d{7,8}-[\dkK]$/.test(node.value)) {
+          return node.value.toUpperCase();
+        }
+        if (Array.isArray(node.value)) {
+          for (const child of node.value) {
+            const encontrado = buscarRutEnAsn1(child);
+            if (encontrado) return encontrado;
+          }
+        }
+        return null;
+      };
+      for (const altName of san.altNames) {
+        const encontrado = buscarRutEnAsn1(altName);
+        if (encontrado) { rut = encontrado; break; }
+      }
+    }
+  }
+
   if (!rut && nombre) {
     const m = nombre.match(/\d{7,8}-[\dkK]/);
     if (m) rut = m[0];
@@ -123,6 +149,8 @@ function parseCertificate(p12Buffer, password) {
     certBase64,
     rut,
     nombre,
+    notBefore: certificate.validity?.notBefore ?? null,
+    notAfter:  certificate.validity?.notAfter  ?? null,
     privateKeyForge: privateKey,
     certificateForge: certificate
   };

@@ -92,24 +92,37 @@ npx wrangler deploy # deploy manual si no hay CI configurado
 
 ## Estado de la certificación PUDU (78392059-K)
 
-- ✅ **Etapa 1** — Set Básico: 8 DTEs aprobados (con 1 reparo menor en NC F1)
-- ✅ **Etapa 2** — Libro de Ventas: LOK + LTC
-- ✅ **Etapa 3** — Libro de Compras: LOK + LTC
+**COMPLETADA el 2026-05-18** — las 4 etapas aprobadas. Detalle, IDs de envío y folios en
+[`backend/docs/RESUMEN_CERTIFICACION_78392059K.md`](backend/docs/RESUMEN_CERTIFICACION_78392059K.md).
 
-**Próximo paso**: Esperar resolución administrativa del SII para emitir DTEs en producción.
+- ✅ **Etapa 1** — Set Básico (EnvioDTE 8/8 AOK) + Libro de Ventas (LOK/LTC) + Libro de Compras (LTC)
+- ✅ **Etapa 2** — Simulación (3/3 AOK)
+- ✅ **Etapa 3** — Intercambio (3 XML OK)
+- ✅ **Etapa 4** — Muestras impresas (16/16)
 
-### Folios ya enviados al SII
+### Folios ya enviados al SII (PUDU)
 
 ⚠️ **NO REUTILIZAR**, causaría DTE-3-100 (DTE Repetido):
 
-| Tipo | Folios usados |
-|---|---|
-| T33 (Factura) | 1-24 |
-| T56 (Nota Débito) | 1-6 |
-| T61 (Nota Crédito) | 1-18 |
+| Tipo | Folios consumidos | Próximo libre |
+|---|---|---|
+| T33 (Factura) | 1-37 | 38 |
+| T56 (Nota Débito) | 1-10 | 11 |
+| T61 (Nota Crédito) | 1-28 | 29 |
 
-Actualizar `FOLIOS_YA_ENVIADOS` en `test_certificacion.py` y `firmar_libro_ventas.py`
-tras cada envío exitoso.
+El wizard **no** persiste folios: por defecto arranca en el primer folio del CAF. Al
+certificar cualquier RUT, indicar el folio inicial en la interfaz (Etapa 1 y Etapa 2)
+después de cada envío al SII, incluso si fue rechazado. Para PUDU, actualizar también
+`FOLIOS_YA_ENVIADOS` en `test_certificacion.py` / `firmar_libro_ventas.py`.
+
+### Certificar otra empresa
+
+1. Preparar el `DATOS.txt` con las **11 líneas** (formato en `backend/docs/GUIA_PRUEBAS.md`;
+   la web muestra el formato y valida el archivo). Las líneas 10-11 (N° y fecha de resolución)
+   son las que el SII contrasta en la carátula → `CRT-3-19` si no coinciden con lo publicado
+   en maullin.sii.cl. N° = `0` en certificación.
+2. Subir certificado + DATOS.txt + CAFs en "Configuración" del wizard e ingresar la clave.
+3. Seguir las etapas. Ver `backend/docs/LECCIONES_TECNICAS.md` antes de tocar el generador.
 
 ---
 
@@ -118,7 +131,7 @@ tras cada envío exitoso.
 ### Generar set completo (Etapas 1+2+3)
 
 ```bash
-cd "f:\PUDU\Certificador Pudu\backend"
+cd "d:\PUDU\Certificador Pudu\backend"
 python test_certificacion.py
 ```
 
@@ -133,7 +146,7 @@ Luego subir cada archivo al portal SII.
 ### Generar solo libro de ventas
 
 ```bash
-cd "f:\PUDU\Certificador Pudu\backend"
+cd "d:\PUDU\Certificador Pudu\backend"
 python firmar_libro_ventas.py
 ```
 
@@ -142,10 +155,14 @@ Genera carpeta `output/libroventas_YYYYMMDD_HHMM/LibroVentas_78392059K.xml`.
 ### Verificar firmas
 
 ```bash
-cd "f:\PUDU\Certificador Pudu\verify"
+cd "d:\PUDU\Certificador Pudu\verify"
 node verify_dte.js                   # verifica último EnvioDTE
 node compare_firma.js                # compara firma Python vs pudu server
 ```
+
+> `verify/` son herramientas locales de desarrollo: dependen de `d:\PUDU\SII_pudu_Server`.
+> El runtime del backend (Cloud Run) NO las usa — todo lo que firma vive en `backend/builders/`
+> (`pudu_sign.cjs`, `firmar_respuesta_dte.cjs`, `firmar_envio_recibos.cjs` + `vendor/signer.js`).
 
 ---
 
@@ -153,7 +170,8 @@ node compare_firma.js                # compara firma Python vs pudu server
 
 **TODO se firma vía `sign_via_pudu()`** (`backend/builders/common.py`), que internamente:
 1. Llama a `pudu_sign.cjs` (Node.js)
-2. Que usa `signer.js` del `f:\PUDU\SII_pudu_Server\src\signer.js` (xml-crypto)
+2. Que usa `backend/builders/vendor/signer.js` — copia vendorizada del `signer.js` de
+   `SII_pudu_Server` (xml-crypto). Si el server corrige un bug de firma, replicarlo ahí a mano.
 
 **NO firmar XMLDsig con lxml/Python directo** — tiene bugs de C14N que el SII rechaza.
 
@@ -206,11 +224,15 @@ El resumen `<ResumenPeriodo>` correspondiente debe incluir `<TotIVARetTotal>`.
 
 **ANTES de tocar `backend/builders/`, `libro_builder.py` o firma XMLDsig**, leer:
 
-1. **`MEMORIES.md`** (este folder) — apunta a las memorias globales en
-   `C:\Users\DigitalFox\.claude\projects\f--SandBox\memory\`
-2. **`sii_certificador_lessons.md`** (memoria global) — catálogo de errores SII
-   y soluciones probadas
+1. **`backend/docs/LECCIONES_TECNICAS.md`** — catálogo de errores SII y soluciones
+   probadas (22 lecciones; es la fuente de verdad, las memorias globales viejas se perdieron)
+2. **`backend/docs/RESUMEN_CERTIFICACION_78392059K.md`** — estado y folios de PUDU
 3. **`backend/REGISTRO_ENVIOS.md`** — historial de envíos al SII y sus resultados
+4. **`MEMORIES.md`** (este folder) — tablas rápidas de estados/errores SII
+
+**Una sola implementación por XML**: el wizard (`main.py`) y los scripts
+(`test_certificacion.py`, `firmar_libro_*.py`) deben llamar a las mismas funciones de
+`builders/` y `libro_builder.py`. Tener dos copias fue lo que produjo el LRH de la lección 20.
 
 **REGLA DE ORO:** firmar SIEMPRE con `sign_via_pudu`. NUNCA volver a firmar
 con lxml/cryptography directo aunque parezca que "ya funciona localmente".
@@ -220,9 +242,10 @@ Lo que importa es que el SII (Java) acepte la firma.
 
 ## Dependencias externas
 
-- **`f:\PUDU\SII_pudu_Server\`** — servidor con `signer.js` (xml-crypto). NO mover. NO modificar.
-- Node.js 24.x con `xml-crypto`, `@xmldom/xmldom`, `node-forge`
-- Python 3.13 con `lxml`, `cryptography`, `reportlab`, `pdf417gen`, `PyMuPDF`
+- **`d:\PUDU\SII_pudu_Server\`** — origen del `signer.js` vendorizado; solo lo usan los
+  scripts de `verify/`. NO modificar desde aquí.
+- Node.js 20+ con `xml-crypto@2`, `@xmldom/xmldom@0.8`, `node-forge` (`backend/package.json`)
+- Python 3.12 con `lxml`, `cryptography`, `reportlab`, `pdf417gen`, `PyMuPDF` (`backend/requirements.txt`)
 
 ## Sitios del SII
 

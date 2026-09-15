@@ -21,10 +21,92 @@ from builders.envio_dte import CAF, build_dte_xml, build_envio_dte, aplicar_regl
 from libro_builder import build_libro_ventas, build_libro_compras
 from timestamped_output import get_timestamped_output_dir
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_BACKEND_DIR)
 OUTPUT_BASE_DIR = os.path.join(_PROJECT_ROOT, "output")
-_FIRMA_RESP  = os.path.join(_PROJECT_ROOT, "verify", "firmar_respuesta_dte.js")
-_FIRMA_RECIB = os.path.join(_PROJECT_ROOT, "verify", "firmar_envio_recibos.js")
+# Scripts de firma de Etapa 3. Viven en backend/builders/ (no en verify/) porque
+# el Cloud Run de certificador-sii solo empaqueta backend/ — con la ruta vieja
+# (<raíz>/verify/*.js + require a d:/PUDU/SII_pudu_Server) /etapa3 daba 500 en prod.
+_FIRMA_RESP  = os.path.join(_BACKEND_DIR, "builders", "firmar_respuesta_dte.cjs")
+_FIRMA_RECIB = os.path.join(_BACKEND_DIR, "builders", "firmar_envio_recibos.cjs")
+
+# ─── DATOS.txt ───────────────────────────────────────────────────────────────
+# Una línea por dato, en este orden. Las 11 son obligatorias: sin las líneas 10-11
+# el SII rechaza el envío con CRT-3-19 "Fecha/Numero Resolucion Invalido" (antes
+# se rellenaban en silencio con 0 / fecha de hoy). Ver docs/GUIA_PRUEBAS.md y
+# Manual SII §"Carátula": NroResol = 0 fijo en certificación, FchResol = la fecha
+# publicada en los datos de la empresa en maullin.sii.cl.
+DATOS_LINEAS = [
+    "Nombre representante legal",
+    "RUT representante (RutEnvia, con guión)",
+    "Razón social",
+    "RUT empresa (RutEmisor, con guión)",
+    "Clave del certificado .pfx",
+    "Giro comercial",
+    "Código actividad económica (Acteco)",
+    "Dirección de origen",
+    "Comuna de origen",
+    "Número de resolución SII (0 en certificación)",
+    "Fecha de resolución (YYYY-MM-DD)",
+]
+_RUT_RE = _re.compile(r"^\d{7,8}-[\dkK]$")
+_FECHA_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _decode_datos(raw: bytes) -> str:
+    # El SII trabaja en ISO-8859-1, pero un DATOS.txt guardado desde el bloc de
+    # notas moderno viene en UTF-8. Si es UTF-8 válido, usarlo; si no, latin1.
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("iso-8859-1")
+
+
+def _parse_datos(raw: bytes) -> dict:
+    """Valida y parsea DATOS.txt. Devuelve emisor_data + nombre + clave PFX.
+
+    Lanza 422 con un mensaje que nombra exactamente las líneas que faltan o
+    están mal formadas, para que el usuario corrija el archivo antes de gastar
+    folios en un envío que el SII va a rechazar.
+    """
+    lineas = [l.strip() for l in _decode_datos(raw).splitlines() if l.strip()]
+    if len(lineas) < len(DATOS_LINEAS):
+        faltan = [f"{i + 1} ({DATOS_LINEAS[i]})" for i in range(len(lineas), len(DATOS_LINEAS))]
+        raise HTTPException(
+            422,
+            f"DATOS.txt tiene {len(lineas)} línea(s) y necesita {len(DATOS_LINEAS)}. "
+            f"Faltan: {', '.join(faltan)}. Una línea por dato, sin líneas vacías intermedias.",
+        )
+    errores = []
+    for idx in (1, 3):
+        if not _RUT_RE.match(lineas[idx]):
+            errores.append(f"línea {idx + 1} ({DATOS_LINEAS[idx]}): '{lineas[idx]}' no es un RUT válido (ej. 12345678-9)")
+    if not lineas[9].isdigit():
+        errores.append(f"línea 10 ({DATOS_LINEAS[9]}): '{lineas[9]}' debe ser numérico (0 en certificación)")
+    if not _FECHA_RE.match(lineas[10]):
+        errores.append(f"línea 11 ({DATOS_LINEAS[10]}): '{lineas[10]}' debe tener formato YYYY-MM-DD")
+    else:
+        try:
+            datetime.strptime(lineas[10], "%Y-%m-%d")
+        except ValueError:
+            errores.append(f"línea 11 ({DATOS_LINEAS[10]}): '{lineas[10]}' no es una fecha real")
+    if errores:
+        raise HTTPException(422, "DATOS.txt con errores → " + " · ".join(errores))
+
+    return {
+        "nombre":       lineas[0],
+        "rut_envia":    lineas[1].upper(),
+        "razon_social": lineas[2],
+        "rut":          lineas[3].upper(),
+        "pfx_password": lineas[4],
+        "giro":         lineas[5],
+        "acteco":       lineas[6],
+        "dir_origen":   lineas[7],
+        "cmna_origen":  lineas[8],
+        "unidad_sii":   "",
+        "nro_resol":    lineas[9],
+        "fch_resol":    lineas[10],
+    }
 
 app = FastAPI(title="SII Certificador", version="1.0.0")
 
@@ -73,29 +155,13 @@ async def certificar(
     # Leer archivos
     try:
         set_txt = (await set_pruebas.read()).decode("iso-8859-1")
-        datos_txt = (await datos.read()).decode("iso-8859-1")
+        datos_raw = await datos.read()
         pfx_bytes = await pfx.read()
     except Exception as e:
         raise HTTPException(422, f"Error al leer archivos subidos: {e}")
 
-    # Parsear DATOS.txt
-    dat_lines = [l.strip() for l in datos_txt.splitlines() if l.strip()]
-    if len(dat_lines) < 5:
-        raise HTTPException(422, "DATOS.txt debe tener al menos 5 líneas: nombre, rut_rep, razon_social, rut_empresa, password_pfx [giro] [acteco] [dir_origen] [cmna_origen] [nro_resol] [fch_resol]")
-
-    emisor_data = {
-        "rut": dat_lines[3],
-        "rut_envia": dat_lines[1],
-        "razon_social": dat_lines[2],
-        "giro": dat_lines[5] if len(dat_lines) > 5 else "ACTIVIDADES DE SERVICIOS",
-        "acteco": dat_lines[6] if len(dat_lines) > 6 else "999999",
-        "dir_origen": dat_lines[7] if len(dat_lines) > 7 else "",
-        "cmna_origen": dat_lines[8] if len(dat_lines) > 8 else "",
-        "unidad_sii": "",
-        "nro_resol": dat_lines[9] if len(dat_lines) > 9 else "0",
-        "fch_resol": dat_lines[10] if len(dat_lines) > 10 else datetime.now().strftime("%Y-%m-%d"),
-    }
-    pfx_password = dat_lines[4]
+    emisor_data = _parse_datos(datos_raw)
+    pfx_password = emisor_data["pfx_password"]
 
     # Cargar CAFs disponibles
     cafs: dict[int, CAF] = {}
@@ -107,8 +173,14 @@ async def certificar(
                     cafs[tipo] = CAF(raw)
                 except Exception as e:
                     raise HTTPException(422, f"Error al leer CAF tipo {tipo}: {e}")
-                if not emisor_data["rut"]:
-                    emisor_data["rut"] = cafs[tipo].rut_emisor
+                # El CAF trae el RUT del emisor: si no coincide con DATOS.txt el
+                # SII rechaza el TED. Mejor avisar aquí que después del envío.
+                if cafs[tipo].rut_emisor.upper() != emisor_data["rut"]:
+                    raise HTTPException(
+                        422,
+                        f"El CAF T{tipo} pertenece al RUT {cafs[tipo].rut_emisor} pero "
+                        f"DATOS.txt (línea 4) dice {emisor_data['rut']}.",
+                    )
 
     if not cafs:
         raise HTTPException(422, "Debe subir al menos un archivo CAF")
@@ -184,15 +256,13 @@ async def certificar(
 
     # Generar DTEs firmados
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    # Folio inicial por tipo. Pre-popula folios_usados con todos los previos
-    # para saltarlos y arrancar desde el offset configurado.
-    # Fuente de verdad: sets/pudu_78392059K/certificacion_final/RESUMEN_CERTIFICACION.md
-    # (última certificación real aceptada por el SII, 2026-05-18). Actualizar este
-    # valor manualmente después de cada envío real aceptado — no hay persistencia
-    # automática de folios todavía (ver auditoría: esto es solo para RUT 78392059-K).
-    FOLIO_START = {33: 38, 56: 11, 61: 29}
-    # Override por request: permite fijar el folio inicial desde la interfaz
-    # (ej. cuando un folio ya se usó en un envío previo y hay que saltarlo).
+    # Folio inicial por tipo: por defecto el primer folio del CAF; el usuario lo
+    # sube desde la interfaz cuando ya consumió folios en un envío previo (el
+    # SII rechaza folios repetidos con DTE-3-100). Antes había un FOLIO_START
+    # hardcodeado para PUDU (78392059-K) que se aplicaba a cualquier RUT — los
+    # folios consumidos de PUDU quedan documentados en
+    # docs/RESUMEN_CERTIFICACION_78392059K.md, no en código.
+    FOLIO_START: dict[int, int] = {}
     _folio_overrides = {33: folio_inicial_33, 56: folio_inicial_56,
                         61: folio_inicial_61, 52: folio_inicial_52,
                         46: folio_inicial_46}
@@ -470,23 +540,8 @@ async def etapa2_simulacion(
       modo='basico' → T33 Factura, T61 NC (ref T33), T56 ND (anula NC)
       modo='compra' → T46 Factura de Compra con retención total del IVA
     """
-    dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
-    dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
-    if len(dat_lines) < 5:
-        raise HTTPException(422, "DATOS.txt debe tener al menos 5 líneas")
-
-    emisor_data = {
-        "rut":         dat_lines[3],
-        "rut_envia":   dat_lines[1],
-        "razon_social":dat_lines[2],
-        "giro":        dat_lines[5] if len(dat_lines) > 5 else "ACTIVIDADES DE SERVICIOS",
-        "acteco":      dat_lines[6] if len(dat_lines) > 6 else "999999",
-        "dir_origen":  dat_lines[7] if len(dat_lines) > 7 else "",
-        "cmna_origen": dat_lines[8] if len(dat_lines) > 8 else "",
-        "nro_resol":   dat_lines[9] if len(dat_lines) > 9 else "0",
-        "fch_resol":   dat_lines[10] if len(dat_lines) > 10 else datetime.now().strftime("%Y-%m-%d"),
-    }
-    pfx_password = dat_lines[4]
+    emisor_data  = _parse_datos(await datos.read())
+    pfx_password = emisor_data["pfx_password"]
     pfx_bytes    = await pfx.read()
 
     async def _leer_caf(upload, etiqueta):
@@ -494,9 +549,25 @@ async def etapa2_simulacion(
         if not raw:
             return None
         try:
-            return CAF(raw)
+            caf = CAF(raw)
         except Exception as e:
             raise HTTPException(422, f"Error leyendo {etiqueta}: {e}")
+        if caf.rut_emisor.upper() != emisor_data["rut"]:
+            raise HTTPException(
+                422,
+                f"El {etiqueta} pertenece al RUT {caf.rut_emisor} pero DATOS.txt "
+                f"(línea 4) dice {emisor_data['rut']}.",
+            )
+        return caf
+
+    def _folio_en_rango(caf: CAF, folio: int, etiqueta: str) -> int:
+        if not (caf.desde <= folio <= caf.hasta):
+            raise HTTPException(
+                422,
+                f"Folio {folio} para {etiqueta} fuera del rango autorizado del CAF "
+                f"({caf.desde}-{caf.hasta}).",
+            )
+        return folio
 
     modo = (modo or "basico").lower()
     if modo not in ("basico", "compra"):
@@ -516,9 +587,9 @@ async def etapa2_simulacion(
         faltan = [f"T{t}" for t, c in [(46, caf46), (61, caf61), (56, caf56)] if not c]
         if faltan:
             raise HTTPException(422, f"La simulación de Factura de Compra requiere los CAF: {', '.join(faltan)}.")
-        f46 = folio_46 or caf46.desde
-        f61 = folio_61 or caf61.desde
-        f56 = folio_56 or caf56.desde
+        f46 = _folio_en_rango(caf46, folio_46 or caf46.desde, "T46")
+        f61 = _folio_en_rango(caf61, folio_61 or caf61.desde, "T61")
+        f56 = _folio_en_rango(caf56, folio_56 or caf56.desde, "T56")
 
         caso_t46 = CasoSet(numero="SIM-1", tipo_doc=46,
                            items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
@@ -555,9 +626,9 @@ async def etapa2_simulacion(
         faltan = [f"T{t}" for t, c in [(33, caf33), (61, caf61), (56, caf56)] if not c]
         if faltan:
             raise HTTPException(422, f"La simulación de Set Básico requiere los CAF: {', '.join(faltan)}.")
-        f33 = folio_33 or caf33.desde
-        f61 = folio_61 or caf61.desde
-        f56 = folio_56 or caf56.desde
+        f33 = _folio_en_rango(caf33, folio_33 or caf33.desde, "T33")
+        f61 = _folio_en_rango(caf61, folio_61 or caf61.desde, "T61")
+        f56 = _folio_en_rango(caf56, folio_56 or caf56.desde, "T56")
 
         caso_t33 = CasoSet(numero="SIM-1", tipo_doc=33,
                            items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
@@ -645,17 +716,13 @@ async def etapa3_intercambio(
     """
     from lxml import etree as _etree
 
-    dat_lines = [(await datos.read()).decode("iso-8859-1", errors="replace").splitlines()]
-    dat_lines = [l.strip() for l in dat_lines[0] if l.strip()]
-    if len(dat_lines) < 5:
-        raise HTTPException(422, "DATOS.txt debe tener al menos 5 líneas")
-
+    emisor_data = _parse_datos(await datos.read())
     dat = {
-        "rut":       dat_lines[3],
-        "rut_envia": dat_lines[1],
-        "nombre":    dat_lines[0],
+        "rut":       emisor_data["rut"],
+        "rut_envia": emisor_data["rut_envia"],
+        "nombre":    emisor_data["nombre"],
         "email":     "contacto@empresa.cl",
-        "_pfx_pass": dat_lines[4],
+        "_pfx_pass": emisor_data["pfx_password"],
     }
     pfx_bytes   = await pfx.read()
     set_xml_raw = await set_intercambio.read()
@@ -801,7 +868,7 @@ async def etapa3_intercambio(
         with open(pfx_tmp,  "wb") as f: f.write(pfx_bytes)
         r = subprocess.run(
             ["node", js_script, unsigned, signed, pfx_tmp, dat["_pfx_pass"]],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=60,
         )
         if r.returncode != 0:
             raise RuntimeError(f"Firma fallida ({name}): {r.stderr}")
