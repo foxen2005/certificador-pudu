@@ -124,6 +124,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Certificaciones adicionales (Exportación 110/111/112, …): router independiente
+# en routers/, no toca los endpoints del set básico. Import tardío porque el
+# router reutiliza _parse_datos/OUTPUT_BASE_DIR definidos más abajo.
+from routers.exportacion_api import router as _exportacion_router  # noqa: E402
+app.include_router(_exportacion_router)
+
 
 RECEPTOR_PRUEBA = {
     "rut": "77221286-0",

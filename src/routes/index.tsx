@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, Download, AlertCircle, ChevronRight, Lock, FileDown } from "lucide-react";
 import { DATOS_LINEAS, DATOS_OBLIGATORIAS, decodificarDatos, plantillaDatosTxt, validarDatosTxt } from "@/lib/datos-txt";
@@ -1003,6 +1003,12 @@ function CertWizard() {
           <div className="sticky top-8">
             <p className="mb-3 text-xs font-bold uppercase tracking-wider text-muted-foreground">Progreso</p>
             <Stepper current={current} status={status} onGo={setCurrent} />
+
+            <div className="mt-6 rounded-lg border p-3 text-xs">
+              <p className="mb-1 font-semibold text-foreground">Certificaciones adicionales</p>
+              <p className="text-muted-foreground">Exportación (110/111/112), Factura de Compra, Guías, Exenta — sets aparte del básico.</p>
+              <Link to="/adicionales" className="mt-2 inline-block font-semibold text-primary hover:underline">Abrir módulos →</Link>
+            </div>
 
             <div className="mt-6 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
               <p className="font-semibold text-foreground mb-1">¿Qué es la certificación?</p>

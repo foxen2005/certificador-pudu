@@ -33,6 +33,11 @@ d:\PUDU\Certificador Pudu\
 │   ├── test_certificacion.py  ← script principal (genera y firma todo)
 │   ├── firmar_libro_ventas.py ← script enfocado solo en libro de ventas
 │   ├── main.py             ← API FastAPI (endpoints: /certificar, /procesar, /validar, /etapa2, /etapa3, /etapa4)
+│   ├── exportacion.py      ← módulo Exportación 110/111/112 (<Exportaciones>, Aduana, OtraMoneda)
+│   ├── generator_exportacion.py ← PDF de exportación
+│   ├── xsd_validator.py    ← validación contra XSD oficial (schemas/)
+│   ├── routers/exportacion_api.py ← /adicionales/*
+│   ├── schemas/            ← DTE_v10, EnvioDTE_v10, SiiTypes_v10, xmldsignature_v10 (copia de Documentacion SII)
 │   ├── Dockerfile          ← Python 3.12-slim, OPENSSL_CONF=openssl_legacy.cnf (certs SII con RC2-40/3DES+SHA1)
 │   ├── docs\               ← documentación interna
 │   └── legacy\             ← versiones viejas de builders (referencia)
@@ -114,6 +119,15 @@ El wizard **no** persiste folios: por defecto arranca en el primer folio del CAF
 certificar cualquier RUT, indicar el folio inicial en la interfaz (Etapa 1 y Etapa 2)
 después de cada envío al SII, incluso si fue rechazado. Para PUDU, actualizar también
 `FOLIOS_YA_ENVIADOS` en `test_certificacion.py` / `firmar_libro_ventas.py`.
+
+### Certificaciones adicionales (`/adicionales`)
+
+Módulos aparte del set básico, uno por tipo de documento con set propio del SII:
+- **Exportación 110/111/112** — funcional: genera T110→T112→T111 con `<Exportaciones>`, Aduana,
+  `TpoMoneda`/`OtraMoneda`, valida contra el XSD oficial (`backend/schemas/`) y genera PDFs.
+  Backend en `backend/exportacion.py` + `routers/exportacion_api.py`; lección 25.
+- **Guía de Despacho 52** y **Factura Exenta 34** — visibles, requieren el set de pruebas del SII.
+- **Factura de Compra 46** — ya está en el wizard principal (Etapa 1 CAF + Etapa 2 modo compra).
 
 ### Certificar otra empresa
 

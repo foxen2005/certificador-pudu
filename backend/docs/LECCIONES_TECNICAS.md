@@ -291,3 +291,24 @@ Contrastado `generator.py` con `Documentacion/manual_muestras_impresas.pdf` (§1
 - `MailContacto` es opcional en ambos esquemas: ahora sale de la línea 12 del DATOS.txt (opcional) y si no está, se omite (antes iba `contacto@empresa.cl` inventado).
 
 Ninguno de estos puntos fue rechazado por el SII en la certificación de PUDU (aprobó 16/16 y los 3 XML de intercambio), pero el manual es explícito y el revisor humano ("Rev. Func.") puede objetarlos.
+
+---
+
+## 25. Exportación (110/111/112): módulo aparte + validación XSD (v1.7.0, 2026-09-21)
+
+**Fuente**: `D:\PUDU\Documentacion SII\` — Formato DTE v2.5 (2026-02), XSD oficiales (`XML/schema_dte/`, copiados a `backend/schemas/`), y los EnvioDTE reales `exportartaciony doc nuevos/dte110f202.xml` / `dte112f102.xml` (validan contra el XSD).
+
+**Qué es distinto en exportación** (y por qué NO se reutiliza `build_dte_xml`):
+- El cuerpo del DTE es `<Exportaciones ID>` en vez de `<Documento ID>` (el XSD separa las familias Documento / Liquidacion / Exportaciones). `build_envio_dte` busca `Documento` → habría fallado.
+- Receptor = `55555555-5` siempre; `Extranjero/Nacionalidad` opcional.
+- `Totales` = `TpoMoneda` (enum TipMonType: "DOLAR USA", "EURO", "PESO CL"…) + `MntExe` + `MntTotal`, ambos `xs:decimal`. Sin `MntNeto`/`IVA`; cada ítem `IndExe=1`.
+- `OtraMoneda` ("PESO CL", `TpoCambio`, `MntExeOtrMnda`, `MntTotOtrMnda`) — el XSD lo marca opcional, la bitácora del Formato (2017) lo exige en exportación.
+- `Transporte/Aduana`: `CodModVenta` obligatorio salvo IndServicio 3/4/5; el resto según mercadería. Códigos = tablas de Aduana (aduana.cl), no del SII. **Orden de elementos estricto** (ver `build_exportacion_dte`).
+- NC/ND 111/112 deben referenciar la 110 (`TpoDocRef=110`, `CodRef` 1/2/3).
+- TED: `MNT` es `ValorType` (decimal) en Exportaciones, no `unsignedLong` como en Documento.
+
+**Implementación**: `backend/exportacion.py` (modelo + builder + envío + parser), `backend/generator_exportacion.py` (PDF sin cedible, con moneda/país/puertos/bultos que exige el Manual de Muestras §"Documentos de Exportación"), `backend/routers/exportacion_api.py` (`/adicionales/exportacion/simulacion`, `/adicionales/exportacion/muestras`, `/adicionales/validar-xsd`), `src/routes/adicionales.tsx`. Solo se tocó del set básico: `main.py` (include_router) y `validator.py` (3 nombres en `TIPO_NOMBRE`).
+
+**Validación XSD**: `xsd_validator.validar_envio_dte()` corre sobre cada EnvioDTE de exportación antes de devolverlo. De paso se comprobó que el EnvioDTE aprobado de PUDU (set básico) también valida — el endpoint `/adicionales/validar-xsd` sirve para cualquier tipo.
+
+**Pendiente**: parser del `SIISetDePruebas` de exportación (el SII lo genera por contribuyente; La Repostería 77334712-3 ya tiene CAF 110/111/112 del 2026-08-26 y puede bajarlo en maullin), tablas de Aduana completas, libro de ventas con 110/111/112.

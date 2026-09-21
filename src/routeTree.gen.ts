@@ -9,10 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as AdicionalesRouteImport } from './routes/adicionales'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiCheckClaveRouteImport } from './routes/api/check-clave'
 import { Route as ApiSiiSplatRouteImport } from './routes/api/sii.$'
 
+const AdicionalesRoute = AdicionalesRouteImport.update({
+  id: '/adicionales',
+  path: '/adicionales',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -31,36 +37,47 @@ const ApiSiiSplatRoute = ApiSiiSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/adicionales': typeof AdicionalesRoute
   '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/adicionales': typeof AdicionalesRoute
   '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/adicionales': typeof AdicionalesRoute
   '/api/check-clave': typeof ApiCheckClaveRoute
   '/api/sii/$': typeof ApiSiiSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/check-clave' | '/api/sii/$'
+  fullPaths: '/' | '/adicionales' | '/api/check-clave' | '/api/sii/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/check-clave' | '/api/sii/$'
-  id: '__root__' | '/' | '/api/check-clave' | '/api/sii/$'
+  to: '/' | '/adicionales' | '/api/check-clave' | '/api/sii/$'
+  id: '__root__' | '/' | '/adicionales' | '/api/check-clave' | '/api/sii/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdicionalesRoute: typeof AdicionalesRoute
   ApiCheckClaveRoute: typeof ApiCheckClaveRoute
   ApiSiiSplatRoute: typeof ApiSiiSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/adicionales': {
+      id: '/adicionales'
+      path: '/adicionales'
+      fullPath: '/adicionales'
+      preLoaderRoute: typeof AdicionalesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdicionalesRoute: AdicionalesRoute,
   ApiCheckClaveRoute: ApiCheckClaveRoute,
   ApiSiiSplatRoute: ApiSiiSplatRoute,
 }
