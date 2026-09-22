@@ -18,6 +18,11 @@ from reportlab.lib.units import cm, mm
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from exportacion import COD_CLAU_VENTA, COD_MOD_VENTA, COD_VIA_TRANSP, TIPO_NOMBRE_EXP, DocExpParsed
+
+# Formato DTE — tipos de referencia usados en exportación
+REF_NOMBRE = {"801": "ORDEN DE COMPRA", "802": "NOTA DE PEDIDO", "803": "CONTRATO", "804": "RESOLUCIÓN",
+              "807": "DUS", "808": "B/L (CONOCIMIENTO DE EMBARQUE)", "809": "AWB (AIR WAYBILL)", "810": "MIC/DTA",
+              "811": "CARTA DE PORTE", "812": "RESOLUCIÓN DEL SNA", "813": "PASAPORTE"}
 from generator import PDF417Barcode, _compact_ted, fmt_date, fmt_date_short, fmt_rut
 
 
@@ -113,7 +118,7 @@ def generate_pdf_exportacion(dte: DocExpParsed) -> bytes:
     if dte.referencias:
         rows = [["Tipo Documento", "Folio", "Fecha", "Razón Referencia"]]
         for r in dte.referencias:
-            nombre = TIPO_NOMBRE_EXP.get(int(r.tipo_doc), r.tipo_doc) if r.tipo_doc.isdigit() else r.tipo_doc
+            nombre = REF_NOMBRE.get(r.tipo_doc) or (TIPO_NOMBRE_EXP.get(int(r.tipo_doc), r.tipo_doc) if r.tipo_doc.isdigit() else r.tipo_doc)
             rows.append([nombre, r.folio, fmt_date_short(r.fecha), r.razon or ""])
         ref_t = Table(rows, colWidths=[6.5 * cm, 1.8 * cm, 2.2 * cm, usable_w - 10.5 * cm])
         ref_t.setStyle(TableStyle([("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 7),
@@ -121,26 +126,41 @@ def generate_pdf_exportacion(dte: DocExpParsed) -> bytes:
         story += [Paragraph("<b>Referencias a otros documentos</b>", bold), ref_t, Spacer(1, 2 * mm)]
 
     # ── Detalle (ítems exentos, precios en la moneda de la transacción) ────
-    rows = [["#", "Descripción", "IE", "Cant.", "Unid.", "P. Unitario", "Total"]]
+    rows = [["#", "Descripción", "IE", "Cant.", "Unid.", "P. Unitario", "Dscto./Rec.", "Total"]]
     for it in dte.items:
-        rows.append([str(it.nro), it.nombre, "EX", _money(it.cantidad).replace(",00", ""), it.unidad,
-                     _money(it.precio), _money(it.monto)])
-    det = Table(rows, colWidths=[0.7 * cm, 7.3 * cm, 0.8 * cm, 1.6 * cm, 1.2 * cm, 2.6 * cm, 2.8 * cm])
+        ajuste = ""
+        if it.descuento_monto:
+            ajuste = f"-{_money(it.descuento_monto)}" + (f" ({it.descuento_pct}%)" if it.descuento_pct else "")
+        if it.recargo_monto:
+            ajuste = (ajuste + " " if ajuste else "") + f"+{_money(it.recargo_monto)}" + (f" ({it.recargo_pct}%)" if it.recargo_pct else "")
+        rows.append([str(it.nro), Paragraph(it.nombre, small), "EX", _money(it.cantidad).replace(",00", "") if it.cantidad else "",
+                     it.unidad, _money(it.precio) if it.precio else "", Paragraph(ajuste, small), _money(it.monto)])
+    det = Table(rows, colWidths=[0.7 * cm, 5.6 * cm, 0.8 * cm, 1.4 * cm, 1.1 * cm, 2.3 * cm, 2.5 * cm, 2.6 * cm])
     det.setStyle(TableStyle([("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
                              ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8E8E8")), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
                              ("ALIGN", (3, 0), (-1, -1), "RIGHT")]))
     story += [Paragraph(f"<b>Detalle</b> — montos expresados en {dte.moneda}", small), det, Spacer(1, 2 * mm)]
 
     # ── Totales: en moneda + conversión a pesos (OtraMoneda) ───────────────
-    tot_rows = [
+    tot_rows = []
+    # Recargos/descuentos globales (flete, seguro, comisiones): parte del Monto Exento
+    for rg in dte.recargos:
+        signo = "+" if rg.tipo == "R" else "-"
+        tot_rows.append([f"{'Recargo' if rg.tipo == 'R' else 'Descuento'} global — {rg.glosa}:", f"{signo}{_money(rg.valor, dte.moneda)}"])
+    tot_rows += [
         ["Monto Exento:", _money(dte.mnt_exe, dte.moneda)],
         [f"Total ({dte.moneda}):", _money(dte.mnt_total, dte.moneda)],
         [f"Tipo de cambio (1 {dte.moneda} = CLP):", ("$" + _money(dte.tipo_cambio)) if dte.tipo_cambio else "—"],
         ["Total en pesos (CLP):", _clp(dte.mnt_total_clp) if dte.mnt_total_clp else "—"],
     ]
     tot = Table(tot_rows, colWidths=[usable_w - 5 * cm, 5 * cm])
-    tot.setStyle(TableStyle([("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
-                             ("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("LINEABOVE", (0, 1), (-1, 1), 0.5, colors.black)]))
+    fila_total = len(dte.recargos) + 1   # fila "Total (moneda)"
+    tot.setStyle(TableStyle([("FONTNAME", (0, fila_total), (-1, fila_total), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+                             ("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("LINEABOVE", (0, fila_total), (-1, fila_total), 0.5, colors.black)]))
+    if dte.fma_pag_exp == "21":
+        story.append(Paragraph("Forma de pago de exportación: SIN PAGO (código 21) — Monto Total 0 según Formato DTE.", small))
+    if dte.ind_servicio:
+        story.append(Paragraph(f"Indicador de servicio: {dte.ind_servicio} (3 = servicio de exportación, 4 = hotelería, 5 = transporte internacional)", small))
     story += [tot, Spacer(1, 4 * mm)]
 
     # ── Timbre (§1.5) — sin cedible ni acuse: no aplica a exportación ──────

@@ -235,6 +235,15 @@ function CafConFolio({ tipo, label, icon, slot, onChange }: {
   );
 }
 
+interface ExpSetResult extends BatchResult {
+  sets?: {
+    nro_atencion: string;
+    nombre: string;
+    archivo: string;
+    casos: { numero: string; tipo: number; folio: number; moneda: string; mnt_total: string; ind_servicio: string; fma_pag_exp: string }[];
+  }[];
+}
+
 function Fieldset({ legend, hint, children }: { legend: string; hint?: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3 rounded-lg border p-4">
@@ -272,11 +281,36 @@ function Exportacion({ shared }: { shared: Shared }) {
   const [xmlMuestras, setXmlMuestras] = useState<File | null>(null);
   const [muestras, setMuestras] = useState<BatchResult | null>(null);
   const [loadingM, setLoadingM] = useState(false);
+  const [setF, setSetF] = useState<File | null>(null);
+  const [resultSet, setResultSet] = useState<ExpSetResult | null>(null);
+  const [loadingS, setLoadingS] = useState(false);
 
   const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const tipos = [110, 112, 111] as const;
+
+  async function generarSet() {
+    setLoadingS(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("set_pruebas", setF!);
+      fd.append("datos", shared.datos);
+      fd.append("pfx", shared.pfx);
+      for (const t of tipos) {
+        fd.append(`caf_${t}`, cafs[t].file!);
+        if (cafs[t].folio.trim()) fd.append(`folio_${t}`, cafs[t].folio.trim());
+      }
+      fd.append("tipo_cambio", form.tipoCambio);
+      if (form.receptorRazon.trim()) fd.append("receptor_razon", form.receptorRazon.trim());
+      setResultSet((await postForm("/api/sii/adicionales/exportacion/set", fd, shared.clave)) as ExpSetResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingS(false);
+    }
+  }
   const cafsOk = tipos.every((t) => cafs[t].file && cafs[t].rango && !cafs[t].error);
   const foliosOk = tipos.every((t) => {
     const s = cafs[t];
@@ -381,7 +415,81 @@ function Exportacion({ shared }: { shared: Shared }) {
         </div>
       </div>
 
+      <Card className="border-primary/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">A · Set de pruebas del SII (certificación)</CardTitle>
+          <CardDescription>
+            Sube el <code className="rounded bg-muted px-1">SIISetDePruebas*.txt</code> con los "SET BASICO DOCUMENTOS DE EXPORTACION". El SII entrega
+            dos sets (mercaderías con NC/ND; servicios, consignación y hotelería) que <strong>se envían por separado</strong>: se genera un EnvioDTE por set,
+            con folios correlativos. Los códigos de Aduana (país, puertos, cláusula, vía, bultos, unidades, forma de pago) se resuelven desde los textos del set.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <UploadBox label="SIISetDePruebas*.txt" hint="Set de exportación descargado de maullin" icon="📋" accept=".txt" file={setF} onChange={setSetF} />
+            <div className="space-y-1">
+              <Label htmlFor="exp-set-tc">Tipo de cambio a CLP<span className="text-destructive"> *</span></Label>
+              <Input id="exp-set-tc" type="number" min={0} step="0.0001" placeholder="ej. 945.37 (Banco Central, fecha de emisión)" value={form.tipoCambio} onChange={set("tipoCambio")} required aria-required />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="exp-set-rec">Razón social del importador (ficticio)</Label>
+              <Input id="exp-set-rec" placeholder="IMPORTADOR DE PRUEBA" value={form.receptorRazon} onChange={set("receptorRazon")} />
+            </div>
+          </div>
+          <Button size="lg" disabled={!setF || !cafsOk || !foliosOk || form.tipoCambio.trim() === "" || loadingS} onClick={generarSet}>
+            {loadingS ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando sets y validando contra XSD…</> : "Generar documentos del set"}
+          </Button>
+          {!cafsOk && <p className="text-xs text-muted-foreground">Sube los tres CAF (110, 112, 111) arriba para habilitar el set.</p>}
+          {error && !loading && (
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          {resultSet && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-4 py-3">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                <div className="flex-1 text-sm">
+                  <strong>{resultSet.sets?.length} EnvioDTE generados y válidos según XSD.</strong> Descarga y guarda el ZIP (una carpeta por set).
+                </div>
+                <Button size="sm" variant="outline" onClick={() => downloadB64(resultSet.zip_base64 ?? "", "exportacion_set.zip")}>
+                  <Download className="mr-1 h-4 w-4" /> Descargar ZIP
+                </Button>
+              </div>
+              {resultSet.sets?.map((s) => (
+                <div key={s.nro_atencion} className="overflow-x-auto rounded-lg border">
+                  <div className="bg-muted/60 px-3 py-2 text-xs font-semibold">{s.nombre} — N° atención {s.nro_atencion} — <span className="font-mono">{s.archivo}</span></div>
+                  <table className="w-full text-xs">
+                    <thead className="text-left"><tr><th className="p-2">Caso</th><th className="p-2">Tipo</th><th className="p-2">Folio</th><th className="p-2">Moneda</th><th className="p-2">Total</th><th className="p-2">IndServicio</th><th className="p-2">FmaPagExp</th></tr></thead>
+                    <tbody>
+                      {s.casos.map((c) => (
+                        <tr key={c.numero} className="border-t">
+                          <td className="p-2 font-mono">{c.numero}</td><td className="p-2">{c.tipo}</td><td className="p-2 font-mono">{c.folio}</td>
+                          <td className="p-2">{c.moneda}</td><td className="p-2 font-mono">{c.mnt_total}</td><td className="p-2">{c.ind_servicio || "—"}</td><td className="p-2">{c.fma_pag_exp || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+              <PortalGuide
+                title="Subir al portal SII"
+                url="https://maullin.sii.cl/cgi_dte/UPL/DTEUpload"
+                steps={[
+                  { text: "Certificación DTE → Envío de Documentos → subir el EnvioDTE del set (1); luego, en otro envío, el del set (2)", highlight: true },
+                  { text: "Esperar EPR + AOK en todos los documentos de cada envío; declarar cada set en 'Revisión del Set'" },
+                  { text: "Muestras impresas: PDFs de este mismo ZIP", highlight: true },
+                ]}
+              />
+              <Results data={resultSet} filename="exportacion_set.zip" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="space-y-4">
+        <h3 className="text-base font-semibold">B · Simulación (sin set)</h3>
         <p className="text-xs text-muted-foreground">Los campos marcados con <span className="text-destructive">*</span> son obligatorios. Todos los montos van en la moneda elegida; la exportación es exenta de IVA.</p>
         <Fieldset legend="Ítem y moneda">
           {field("Producto", "producto", { requerido: true, placeholder: "ej. Alfajores artesanales caja 12u" })}

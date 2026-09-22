@@ -123,9 +123,10 @@ después de cada envío al SII, incluso si fue rechazado. Para PUDU, actualizar 
 ### Certificaciones adicionales (`/adicionales`)
 
 Módulos aparte del set básico, uno por tipo de documento con set propio del SII:
-- **Exportación 110/111/112** — funcional: genera T110→T112→T111 con `<Exportaciones>`, Aduana,
-  `TpoMoneda`/`OtraMoneda`, valida contra el XSD oficial (`backend/schemas/`) y genera PDFs.
-  Backend en `backend/exportacion.py` + `routers/exportacion_api.py`; lección 25.
+- **Exportación 110/111/112** — funcional: parsea los dos "SET BASICO DOCUMENTOS DE EXPORTACION" del SII
+  (códigos de Aduana desde texto, `aduana_tablas.py`), genera un EnvioDTE por set + simulación,
+  valida contra el XSD oficial (`backend/schemas/`) y genera PDFs. `backend/exportacion.py` +
+  `routers/exportacion_api.py`; lecciones 25 y 27.
 - **Guía de Despacho 52** — funcional: parsea el SET GUIA DE DESPACHO (motivo → IndTraslado, traslado por →
   TipoDespacho), receptor = emisor en traslado interno, cedible solo en ventas. `backend/guias.py`; lección 26.
 - **Factura Exenta 34** — visible, requiere el set de pruebas del SII.

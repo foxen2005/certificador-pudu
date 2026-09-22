@@ -67,16 +67,47 @@ COD_VIA_TRANSP = {"1": "Marítima, fluvial y lacustre", "4": "Aéreo", "5": "Pos
 
 # ─── Modelo ──────────────────────────────────────────────────────────────────
 
+D2 = Decimal("0.01")
+
+
 @dataclass
 class ItemExp:
     nombre: str
-    cantidad: Decimal
-    precio: Decimal            # en la moneda de la transacción
-    unidad: str = "U"          # tabla unidades Aduana (U = unidad, KN = kilo neto, ...)
+    cantidad: Decimal | None       # None → ítem de servicio con "valor línea"
+    precio: Decimal | None         # en la moneda de la transacción
+    unidad: str = "U"              # tabla unidades Aduana (U, KN, LT, PAR…)
+    valor_linea: Decimal | None = None   # servicios: monto directo sin cantidad×precio
+    descuento_pct: Decimal | None = None
+    recargo_pct: Decimal | None = None   # ej. "10% recargo en la línea por comisiones"
+
+    @property
+    def bruto(self) -> Decimal:
+        if self.valor_linea is not None:
+            return Decimal(self.valor_linea).quantize(D2)
+        return (self.cantidad * self.precio).quantize(D2, ROUND_HALF_UP)
+
+    # DescuentoMonto / RecargoMonto son MntImpType en el XSD (entero, sin decimales),
+    # también en Exportaciones. Se redondean y MontoItem se calcula con el entero
+    # para que el SII cuadre la línea.
+    @property
+    def descuento_monto(self) -> Decimal:
+        return (self.bruto * self.descuento_pct / 100).quantize(Decimal("1"), ROUND_HALF_UP) if self.descuento_pct else Decimal("0")
+
+    @property
+    def recargo_monto(self) -> Decimal:
+        return (self.bruto * self.recargo_pct / 100).quantize(Decimal("1"), ROUND_HALF_UP) if self.recargo_pct else Decimal("0")
 
     @property
     def monto(self) -> Decimal:
-        return (self.cantidad * self.precio).quantize(Decimal("0.01"), ROUND_HALF_UP)
+        # Formato DTE: MontoItem = (Precio × Cantidad) − Descuento + Recargo
+        return (self.bruto - self.descuento_monto + self.recargo_monto).quantize(D2)
+
+
+@dataclass
+class RecargoGlobal:
+    glosa: str
+    monto: Decimal          # en la moneda de la transacción; TpoValor "$"
+    tipo: str = "R"         # R recargo / D descuento
 
 
 @dataclass
@@ -98,9 +129,12 @@ class AduanaExp:
     nombre_transp: str = ""
     cod_pto_embarque: str = ""
     cod_pto_desemb: str = ""
+    tara: int | None = None
+    cod_unid_tara: str = ""
     peso_bruto: Decimal | None = None
     peso_neto: Decimal | None = None
     cod_unid_peso: str = ""       # ej. "6" = KN (kilo neto) según tabla Aduana
+    cod_unid_peso_neto: str = ""  # si difiere del bruto (el set puede pedir U bruto y KN neto)
     tot_bultos: int | None = None
     cod_tpo_bultos: str = ""
     mnt_flete: Decimal | None = None
@@ -131,6 +165,7 @@ class DocExp:
     ind_servicio: str = ""       # 3/4/5/6 → exportación de servicios
     fma_pag_exp: str = ""        # tabla formas de pago Aduana (21 = sin pago)
     referencias: list[RefExp] = field(default_factory=list)
+    recargos_globales: list[RecargoGlobal] = field(default_factory=list)  # flete, seguro, comisiones
 
     @property
     def id(self) -> str:
@@ -138,11 +173,23 @@ class DocExp:
 
     @property
     def mnt_exe(self) -> Decimal:
-        return sum((it.monto for it in self.items), Decimal("0")).quantize(Decimal("0.01"))
+        # Suma de ítems (exentos) ± descuentos/recargos globales exentos
+        base = sum((it.monto for it in self.items), Decimal("0"))
+        for r in self.recargos_globales:
+            base += r.monto if r.tipo == "R" else -r.monto
+        return base.quantize(D2)
 
     @property
     def mnt_total(self) -> Decimal:
+        # Formato DTE (MntTotal): "En documentos de exportación es 0 (cero) si
+        # forma de pago es = 21 (sin pago)".
+        if self.fma_pag_exp == "21":
+            return Decimal("0")
         return self.mnt_exe
+
+    @property
+    def mnt_exe_clp(self) -> int:
+        return int((self.mnt_exe * self.tipo_cambio).quantize(Decimal("1"), ROUND_HALF_UP))
 
     @property
     def mnt_total_clp(self) -> int:
@@ -177,7 +224,9 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
     if not (caf.desde <= doc.folio <= caf.hasta):
         raise ValueError(f"Folio {doc.folio} fuera del rango del CAF ({caf.desde}-{caf.hasta})")
     if doc.tipo in (111, 112) and not any(r.tipo_doc in ("110", "111", "112") for r in doc.referencias):
-        raise ValueError(f"T{doc.tipo} debe referenciar la factura de exportación (TpoDocRef 110)")
+        raise ValueError(f"T{doc.tipo} debe referenciar la factura/nota de exportación (TpoDocRef 110/112)")
+    if not doc.items:
+        raise ValueError(f"T{doc.tipo} F{doc.folio} sin ítems")
     if doc.moneda not in MONEDAS:
         raise ValueError(f"Moneda '{doc.moneda}' no está en la tabla TipMonType del SII")
 
@@ -229,7 +278,12 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
         _sub(AD, "CodModVenta", a.cod_mod_venta)
     if a.cod_clau_venta:
         _sub(AD, "CodClauVenta", a.cod_clau_venta)
-        _sub(AD, "TotClauVenta", fmt_dec(a.tot_clau_venta if a.tot_clau_venta is not None else doc.mnt_total, 2))
+        # TotClauVenta: valor según cláusula (DUS). Si el set no lo da, el monto
+        # exento del documento. XSD exige ≥ 0.01, por eso no se usa MntTotal
+        # (que es 0 con forma de pago 21).
+        tot_clau = a.tot_clau_venta if a.tot_clau_venta is not None else doc.mnt_exe
+        if tot_clau and tot_clau > 0:
+            _sub(AD, "TotClauVenta", fmt_dec(tot_clau, 2))
     if a.cod_via_transp:
         _sub(AD, "CodViaTransp", a.cod_via_transp)
     if a.nombre_transp:
@@ -238,12 +292,15 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
         _sub(AD, "CodPtoEmbarque", a.cod_pto_embarque)
     if a.cod_pto_desemb:
         _sub(AD, "CodPtoDesemb", a.cod_pto_desemb)
+    if a.tara is not None:
+        _sub(AD, "Tara", a.tara)
+        _sub(AD, "CodUnidMedTara", a.cod_unid_tara or a.cod_unid_peso or "6")
     if a.peso_bruto is not None:
         _sub(AD, "PesoBruto", fmt_dec(a.peso_bruto, 2))
         _sub(AD, "CodUnidPesoBruto", a.cod_unid_peso or "6")
     if a.peso_neto is not None:
         _sub(AD, "PesoNeto", fmt_dec(a.peso_neto, 2))
-        _sub(AD, "CodUnidPesoNeto", a.cod_unid_peso or "6")
+        _sub(AD, "CodUnidPesoNeto", a.cod_unid_peso_neto or a.cod_unid_peso or "6")
     if a.tot_bultos is not None:
         _sub(AD, "TotBultos", a.tot_bultos)
         if a.cod_tpo_bultos:
@@ -270,7 +327,7 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
     OM = etree.SubElement(ENC, "OtraMoneda")
     _sub(OM, "TpoMoneda", "PESO CL")
     _sub(OM, "TpoCambio", fmt_dec(doc.tipo_cambio, 4))
-    _sub(OM, "MntExeOtrMnda", doc.mnt_total_clp)
+    _sub(OM, "MntExeOtrMnda", doc.mnt_exe_clp)
     _sub(OM, "MntTotOtrMnda", doc.mnt_total_clp)
 
     for n, it in enumerate(doc.items, 1):
@@ -278,11 +335,32 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
         _sub(DET, "NroLinDet", n)
         _sub(DET, "IndExe", 1)
         _sub(DET, "NmbItem", it.nombre[:80])
-        _sub(DET, "QtyItem", fmt_dec(it.cantidad, 6))
-        if it.unidad:
-            _sub(DET, "UnmdItem", it.unidad[:4])
-        _sub(DET, "PrcItem", fmt_dec(it.precio, 6))
+        if it.cantidad is not None:
+            _sub(DET, "QtyItem", fmt_dec(it.cantidad, 6))
+            if it.unidad:
+                _sub(DET, "UnmdItem", it.unidad[:4])
+        if it.precio is not None:
+            _sub(DET, "PrcItem", fmt_dec(it.precio, 6))
+        # MntImpType es positiveInteger: si el % redondea a 0 no se emite la línea
+        if it.descuento_pct and it.descuento_monto > 0:
+            _sub(DET, "DescuentoPct", fmt_dec(it.descuento_pct, 2))
+            _sub(DET, "DescuentoMonto", fmt_dec(it.descuento_monto, 0))
+        if it.recargo_pct and it.recargo_monto > 0:
+            _sub(DET, "RecargoPct", fmt_dec(it.recargo_pct, 2))
+            _sub(DET, "RecargoMonto", fmt_dec(it.recargo_monto, 0))
         _sub(DET, "MontoItem", fmt_dec(it.monto, 2))
+
+    # Recargos/descuentos globales (flete, seguro, comisiones). En exportación
+    # ValorDROtrMnda (en pesos) es obligatorio según el Formato DTE.
+    for n, rg in enumerate(doc.recargos_globales, 1):
+        DR = etree.SubElement(EXP, "DscRcgGlobal")
+        _sub(DR, "NroLinDR", n)
+        _sub(DR, "TpoMov", rg.tipo)
+        _sub(DR, "GlosaDR", rg.glosa[:45])
+        _sub(DR, "TpoValor", "$")
+        _sub(DR, "ValorDR", fmt_dec(rg.monto, 2))
+        _sub(DR, "ValorDROtrMnda", fmt_dec((rg.monto * doc.tipo_cambio).quantize(D2, ROUND_HALF_UP), 4))
+        _sub(DR, "IndExeDR", 1)
 
     for n, ref in enumerate(doc.referencias, 1):
         RF = etree.SubElement(EXP, "Referencia")
@@ -364,6 +442,17 @@ class ItemExpParsed:
     unidad: str
     precio: str
     monto: str
+    descuento_pct: str = ""
+    descuento_monto: str = ""
+    recargo_pct: str = ""
+    recargo_monto: str = ""
+
+
+@dataclass
+class RecargoParsed:
+    tipo: str       # R / D
+    glosa: str
+    valor: str
 
 
 @dataclass
@@ -391,6 +480,9 @@ class DocExpParsed:
     ted_xml: str
     nro_resol: str
     fch_resol: str
+    ind_servicio: str = ""
+    fma_pag_exp: str = ""
+    recargos: list[RecargoParsed] = field(default_factory=list)
 
 
 def parse_envio_exportacion(xml_bytes: bytes) -> list[DocExpParsed]:
@@ -417,8 +509,10 @@ def parse_envio_exportacion(xml_bytes: bytes) -> list[DocExpParsed]:
                 tag = etree.QName(c).localname
                 aduana[tag] = (c.text or "").strip() if len(c) == 0 else ""
         items = [ItemExpParsed(int(t(d, "s:NroLinDet") or 0), t(d, "s:NmbItem"), t(d, "s:QtyItem"),
-                               t(d, "s:UnmdItem"), t(d, "s:PrcItem"), t(d, "s:MontoItem"))
+                               t(d, "s:UnmdItem"), t(d, "s:PrcItem"), t(d, "s:MontoItem"),
+                               t(d, "s:DescuentoPct"), t(d, "s:DescuentoMonto"), t(d, "s:RecargoPct"), t(d, "s:RecargoMonto"))
                  for d in exp.findall("s:Detalle", ns)]
+        recargos = [RecargoParsed(t(r, "s:TpoMov"), t(r, "s:GlosaDR"), t(r, "s:ValorDR")) for r in exp.findall("s:DscRcgGlobal", ns)]
         refs = [RefExp(t(rf, "s:TpoDocRef"), t(rf, "s:FolioRef"), t(rf, "s:FchRef"), t(rf, "s:CodRef"), t(rf, "s:RazonRef"))
                 for rf in exp.findall("s:Referencia", ns)]
         docs.append(DocExpParsed(
@@ -435,6 +529,8 @@ def parse_envio_exportacion(xml_bytes: bytes) -> list[DocExpParsed]:
             aduana=aduana, items=items, referencias=refs,
             ted_xml=teds[i] if i < len(teds) else "",
             nro_resol=nro_resol, fch_resol=fch_resol,
+            ind_servicio=t(enc, "s:IdDoc/s:IndServicio"), fma_pag_exp=t(enc, "s:IdDoc/s:FmaPagExp"),
+            recargos=recargos,
         ))
     return docs
 
@@ -455,3 +551,331 @@ def docs_simulacion(fecha: str, folios: dict[int, int], producto: str, cantidad:
                   referencias=[RefExp("112", str(folios[112]), fecha, "1",
                                       f"Anula Nota de Credito de Exportacion {folios[112]}")])
     return [f110, f112, f111]
+
+
+# ─── Set de pruebas de exportación (SII) ─────────────────────────────────────
+#
+# Formato real (PUDU 78392059-K, 2026-09-22, N° atención 5089803 y 5089804):
+#
+#   SET BASICO DOCUMENTOS DE EXPORTACION (1) - NUMERO DE ATENCION: 5089803
+#   CASO 5089803-1
+#   DOCUMENTO   FACTURA DE EXPORTACION ELECTRONICA
+#   ITEM                 CANTIDAD   UNIDAD MEDIDA   PRECIO UNITARIO
+#   CHATARRA DE ALUMINIO    326         U               123
+#   REFERENCIA:                        MIC (MANIFIESTO INTERNACIONAL)
+#   MONEDA DE LA OPERACION:            DOLAR USA
+#   FORMA DE PAGO EXPORTACION:         ACRED
+#   MODALIDAD DE VENTA:                A FIRME
+#   CLAUSULA DE VENTA DE EXPORTACION:  FOB
+#   TOTAL CLAUSULA DE VENTA:           1356.22
+#   VIA DE TRANSPORTE:                 AEREO
+#   PUERTO DE EMBARQUE / DESEMBARQUE:  ARICA / BUENOS AIRES
+#   UNIDAD DE MEDIDA DE TARA / PESO BRUTO / PESO NETO: U / U / KN
+#   TIPO DE BULTO / TOTAL BULTOS:      CONTENEDOR REFRIGERADO / 33
+#   FLETE (**) / SEGURO (**):          306.55 / 69.29
+#   PAIS RECEPTOR Y PAIS DESTINO:      ARGENTINA
+#
+# Variantes: ítems "VALOR LINEA" (servicios, sin cantidad), "%10 RECARGO EN LA
+# LINEA", "COMISIONES EN EL EXTRANJERO (RECARGOS GLOBALES): 11% DEL TOTAL DE LA
+# CLAUSULA", "DESCUENTO LINEA # 1: 5%", "NACIONALIDAD: JAPON" (hotelería), NC con
+# solo cantidades ("EL PRECIO UNITARIO DEBE SER EL MISMO DE LA FACTURA") y ND que
+# anula la NC. Instrucciones del set: (**) flete y seguro van en MntFlete/MntSeguro
+# Y ADEMÁS como dos líneas de recargo global; cada set se envía por separado.
+
+from aduana_tablas import (cod_bulto, cod_clausula, cod_forma_pago, cod_modalidad,
+                           cod_pais, cod_puerto, cod_unidad, cod_via)
+
+_TIPO_SET = {
+    "FACTURA DE EXPORTACION ELECTRONICA": 110,
+    "NOTA DE DEBITO DE EXPORTACION ELECTRONICA": 111,
+    "NOTA DE CREDITO DE EXPORTACION ELECTRONICA": 112,
+}
+# Referencias documentales del set → TpoDocRef (Formato DTE, tabla de tipos de referencia)
+_REF_DOC = {
+    "DUS": "807", "B/L": "808", "BL": "808", "CONOCIMIENTO DE EMBARQUE": "808", "AWB": "809",
+    "MIC": "810", "MIC/DTA": "810", "MANIFIESTO INTERNACIONAL": "810", "CARTA DE PORTE": "811",
+    "RESOLUCION SNA": "812", "RESOLUCION DEL SNA": "812", "PASAPORTE": "813",
+}
+
+
+@dataclass
+class ItemSetExp:
+    nombre: str
+    cantidad: Decimal | None
+    unidad: str | None
+    precio: Decimal | None
+    valor_linea: Decimal | None
+
+
+@dataclass
+class CasoExp:
+    numero: str
+    tipo: int
+    items: list[ItemSetExp] = field(default_factory=list)
+    campos: dict = field(default_factory=dict)          # "MONEDA DE LA OPERACION" → "DOLAR USA"
+    referencias_doc: list[str] = field(default_factory=list)   # "DUS", "AWB", "MIC (…)"
+    referencia_caso: str = ""                             # NC/ND: "5089803-1"
+    razon_referencia: str = ""
+    recargo_linea_pct: Decimal | None = None              # "%10 RECARGO EN LA LINEA DE ITEM"
+    recargo_global_pct: Decimal | None = None             # "COMISIONES … 11% DEL TOTAL DE LA CLAUSULA"
+    descuento_linea: dict = field(default_factory=dict)   # {1: Decimal(5)}
+    notas: list[str] = field(default_factory=list)
+
+    @property
+    def es_servicio(self) -> bool:
+        return bool(self.items) and all(i.valor_linea is not None for i in self.items)
+
+    @property
+    def es_hoteleria(self) -> bool:
+        return self.es_servicio and "NACIONALIDAD" in self.campos and "PUERTO DE EMBARQUE" not in self.campos
+
+
+@dataclass
+class SetExp:
+    nro_atencion: str
+    nombre: str
+    casos: list[CasoExp]
+
+
+def parse_set_exportacion(texto: str) -> list[SetExp]:
+    """Devuelve los sets de exportación del archivo (el SII entrega 2, se envían por separado)."""
+    cabeceras = list(re.finditer(
+        r"^SET\s+BASICO\s+DOCUMENTOS\s+DE\s+EXPORTACION\s*(\([^)]*\))?\s*-\s*NUMERO\s+DE\s+ATENCI[OÓ]N:\s*(\d+)",
+        texto, re.MULTILINE | re.IGNORECASE))
+    if not cabeceras:
+        raise ValueError("El archivo no contiene 'SET BASICO DOCUMENTOS DE EXPORTACION - NUMERO DE ATENCION'")
+    sets = []
+    for i, m in enumerate(cabeceras):
+        fin = cabeceras[i + 1].start() if i + 1 < len(cabeceras) else len(texto)
+        cuerpo = texto[m.end():fin]
+        cuerpo = re.split(r"^INSTRUCCIONES AL CONTRIBUYENTE", cuerpo, flags=re.MULTILINE)[0]
+        sets.append(SetExp(nro_atencion=m.group(2), nombre=m.group(0).split(" - ")[0].strip(), casos=_parse_casos_exp(cuerpo)))
+    return sets
+
+
+def _num(s: str) -> Decimal:
+    return Decimal(s.replace(",", ".").strip())
+
+
+def _parse_casos_exp(cuerpo: str) -> list[CasoExp]:
+    casos: list[CasoExp] = []
+    actual: CasoExp | None = None
+    en_items = False
+    cols: list[str] = []
+    for raw in cuerpo.splitlines():
+        ln = raw.replace("\t", "    ").rstrip()
+        s = ln.strip()
+        if not s or set(s) <= {"=", "-"}:
+            if en_items and actual and actual.items:
+                en_items = False
+            continue
+        mc = re.match(r"^CASO\s+([\d-]+)", s)
+        if mc:
+            actual = CasoExp(numero=mc.group(1), tipo=0)
+            casos.append(actual)
+            en_items = False
+            continue
+        if actual is None:
+            continue
+        md = re.match(r"^DOCUMENTO\s+(.+)$", s, re.IGNORECASE)
+        if md:
+            nombre = re.sub(r"\s+", " ", md.group(1)).upper()
+            if nombre not in _TIPO_SET:
+                raise ValueError(f"Caso {actual.numero}: tipo de documento desconocido '{nombre}'")
+            actual.tipo = _TIPO_SET[nombre]
+            continue
+        mr = re.match(r"^REFERENCIA\s+(.+?)\s+CORRESPONDIENTE\s+A\s+CASO\s+([\d-]+)", s, re.IGNORECASE)
+        if mr:
+            actual.referencia_caso = mr.group(2)
+            continue
+        mz = re.match(r"^RAZON\s+REFERENCIA\s+(.+)$", s, re.IGNORECASE)
+        if mz:
+            actual.razon_referencia = mz.group(1).strip()
+            continue
+        if re.match(r"^ITEM\b", s, re.IGNORECASE) and ("CANTIDAD" in s.upper() or "VALOR LINEA" in s.upper()):
+            hdr = s.upper()
+            if "VALOR LINEA" in hdr:
+                cols = ["VALOR"]
+            elif "UNIDAD" in hdr:
+                cols = ["CANT", "UNID", "PRECIO"]
+            elif "PRECIO" in hdr:
+                cols = ["CANT", "PRECIO"]
+            else:
+                cols = ["CANT"]
+            en_items = True
+            continue
+        mk = re.match(r"^([A-ZÁÉÍÓÚÑ/ ()*#0-9]+?)\s*:\s*(.*)$", s)
+        if mk and not en_items:
+            clave = re.sub(r"\s*\(\*\*\)", "", mk.group(1)).strip().upper()
+            valor = mk.group(2).strip()
+            if clave == "REFERENCIA":
+                actual.referencias_doc.append(valor)
+            elif clave.startswith("DESCUENTO LINEA"):
+                mnum = re.search(r"#\s*(\d+)", clave)
+                actual.descuento_linea[int(mnum.group(1)) if mnum else 1] = _num(valor.rstrip("%"))
+            elif "RECARGOS GLOBALES" in clave or "COMISIONES" in clave:
+                mp = re.search(r"(\d+(?:[.,]\d+)?)\s*%", valor)
+                actual.recargo_global_pct = _num(mp.group(1)) if mp else None
+                actual.notas.append(s)
+            else:
+                actual.campos[clave] = valor
+            continue
+        mp = re.match(r"^%\s*(\d+(?:[.,]\d+)?)\s+RECARGO EN LA LINEA", s, re.IGNORECASE)
+        if mp:
+            actual.recargo_linea_pct = _num(mp.group(1))
+            actual.notas.append(s)
+            continue
+        if s.upper().startswith("EL PRECIO UNITARIO"):
+            actual.notas.append(s)
+            en_items = False
+            continue
+        if en_items:
+            # ítem: nombre (con espacios simples) + columnas separadas por ≥2 espacios
+            partes = re.split(r"\s{2,}", s)
+            if len(partes) >= 2:
+                it = ItemSetExp(nombre=partes[0], cantidad=None, unidad=None, precio=None, valor_linea=None)
+                vals = partes[1:]
+                if cols == ["VALOR"]:
+                    it.valor_linea = _num(vals[0])
+                else:
+                    it.cantidad = _num(vals[0])
+                    if "UNID" in cols and len(vals) > 1:
+                        it.unidad = vals[1].strip()
+                    if "PRECIO" in cols and len(vals) >= len(cols):
+                        it.precio = _num(vals[-1])
+                actual.items.append(it)
+    for c in casos:
+        if not c.tipo:
+            raise ValueError(f"Caso {c.numero} sin línea DOCUMENTO")
+        if c.tipo == 110 and not c.items:
+            raise ValueError(f"Caso {c.numero} sin ítems")
+        if c.tipo in (111, 112) and not c.referencia_caso:
+            raise ValueError(f"Caso {c.numero}: NC/ND sin 'REFERENCIA … CORRESPONDIENTE A CASO'")
+    return casos
+
+
+def _ref_doc_code(texto: str) -> str:
+    t = re.sub(r"\s+", " ", texto.upper()).strip()
+    for k, v in _REF_DOC.items():
+        if t.startswith(k) or k in t:
+            return v
+    raise ValueError(f"Referencia documental '{texto}' no reconocida (DUS, AWB, B/L, MIC, CARTA DE PORTE, RESOLUCION SNA, PASAPORTE)")
+
+
+def docs_desde_set(set_exp: SetExp, folios: dict, fecha: str, tipo_cambio: Decimal,
+                   receptor_nombre: str = "IMPORTADOR DE PRUEBA",
+                   tara: int = 50, peso_bruto: Decimal = Decimal("1000"), peso_neto: Decimal = Decimal("950")) -> list[DocExp]:
+    """Convierte los casos del set en DocExp listos para `build_exportacion_dte`.
+
+    `folios` = folio inicial por tipo (se consumen correlativos por tipo). Tara/pesos
+    no vienen en el set ("agregue otros datos que estime necesarios"): se informan
+    con valores por defecto en las unidades que pide el set.
+    """
+    usados: dict = {}
+    por_caso: dict = {}
+    docs: list[DocExp] = []
+
+    def siguiente_folio(tipo: int) -> int:
+        usados[tipo] = usados.get(tipo, folios[tipo] - 1) + 1
+        return usados[tipo]
+
+    for c in set_exp.casos:
+        f = c.campos
+        if c.tipo == 110:
+            moneda = f.get("MONEDA DE LA OPERACION", "")
+            if moneda not in MONEDAS:
+                raise ValueError(f"Caso {c.numero}: moneda '{moneda}' no está en TipMonType del SII")
+            items = [ItemExp(nombre=it.nombre, cantidad=it.cantidad, precio=it.precio, unidad=it.unidad or "U",
+                             valor_linea=it.valor_linea, descuento_pct=c.descuento_linea.get(n),
+                             recargo_pct=c.recargo_linea_pct)
+                     for n, it in enumerate(c.items, 1)]
+            ind_servicio = "4" if c.es_hoteleria else ("3" if c.es_servicio else "")
+            pais_txt = f.get("PAIS RECEPTOR Y PAIS DESTINO") or f.get("PAIS RECEPTOR") or f.get("NACIONALIDAD", "")
+            pais = str(cod_pais(pais_txt)) if pais_txt else ""
+            receptor = ReceptorExp(receptor_nombre, "SIN DIRECCION", pais_txt.title() if pais_txt else "",
+                                   nacionalidad=pais if f.get("NACIONALIDAD") else "")
+            ad = AduanaExp(cod_mod_venta="")
+            if not c.es_hoteleria:
+                if f.get("MODALIDAD DE VENTA"):
+                    ad.cod_mod_venta = str(cod_modalidad(f["MODALIDAD DE VENTA"]))
+                elif not c.es_servicio:
+                    ad.cod_mod_venta = "1"
+                if f.get("CLAUSULA DE VENTA DE EXPORTACION"):
+                    ad.cod_clau_venta = str(cod_clausula(f["CLAUSULA DE VENTA DE EXPORTACION"]))
+                if f.get("TOTAL CLAUSULA DE VENTA"):
+                    ad.tot_clau_venta = _num(f["TOTAL CLAUSULA DE VENTA"])
+                if f.get("VIA DE TRANSPORTE"):
+                    ad.cod_via_transp = str(cod_via(f["VIA DE TRANSPORTE"]))
+                if f.get("PUERTO DE EMBARQUE"):
+                    ad.cod_pto_embarque = str(cod_puerto(f["PUERTO DE EMBARQUE"]))
+                if f.get("PUERTO DE DESEMBARQUE"):
+                    ad.cod_pto_desemb = str(cod_puerto(f["PUERTO DE DESEMBARQUE"]))
+                if f.get("UNIDAD DE MEDIDA DE TARA"):
+                    ad.tara = tara
+                    ad.cod_unid_tara = str(cod_unidad(f["UNIDAD DE MEDIDA DE TARA"]))
+                if f.get("UNIDAD PESO BRUTO"):
+                    ad.peso_bruto = peso_bruto
+                    ad.cod_unid_peso = str(cod_unidad(f["UNIDAD PESO BRUTO"]))
+                if f.get("UNIDAD PESO NETO"):
+                    ad.peso_neto = peso_neto
+                    ad.cod_unid_peso_neto = str(cod_unidad(f["UNIDAD PESO NETO"]))
+                if f.get("TOTAL BULTOS"):
+                    ad.tot_bultos = int(_num(f["TOTAL BULTOS"]))
+                if f.get("TIPO DE BULTO"):
+                    ad.cod_tpo_bultos = str(cod_bulto(f["TIPO DE BULTO"]))
+                if f.get("FLETE"):
+                    ad.mnt_flete = _num(f["FLETE"])
+                if f.get("SEGURO"):
+                    ad.mnt_seguro = _num(f["SEGURO"])
+                ad.cod_pais_recep = pais
+                ad.cod_pais_destin = pais
+            recargos = []
+            # (**) flete y seguro: en el encabezado Y como dos líneas de recargo global
+            if ad.mnt_flete:
+                recargos.append(RecargoGlobal("FLETE", ad.mnt_flete))
+            if ad.mnt_seguro:
+                recargos.append(RecargoGlobal("SEGURO", ad.mnt_seguro))
+            if c.recargo_global_pct and ad.tot_clau_venta:
+                recargos.append(RecargoGlobal("COMISIONES EN EL EXTRANJERO",
+                                              (ad.tot_clau_venta * c.recargo_global_pct / 100).quantize(D2, ROUND_HALF_UP)))
+            refs = [RefExp(_ref_doc_code(r), "1", fecha, "", r[:90]) for r in c.referencias_doc]
+            fma = str(cod_forma_pago(f["FORMA DE PAGO EXPORTACION"])) if f.get("FORMA DE PAGO EXPORTACION") else ""
+            doc = DocExp(110, siguiente_folio(110), fecha, items, moneda, tipo_cambio, receptor, ad,
+                         ind_servicio=ind_servicio, fma_pag_exp=fma, referencias=refs, recargos_globales=recargos)
+        else:
+            ref = por_caso.get(c.referencia_caso)
+            if ref is None:
+                raise ValueError(f"Caso {c.numero} referencia al caso {c.referencia_caso}, que no está antes en el set")
+            razon = c.razon_referencia.upper()
+            def copia(x: ItemExp, cantidad=None) -> ItemExp:
+                return ItemExp(x.nombre, cantidad if cantidad is not None else x.cantidad, x.precio, x.unidad,
+                               x.valor_linea, x.descuento_pct, x.recargo_pct)
+            recargos = []
+            if c.tipo == 112:
+                cod_ref = "3" if "DEVOLUCION" in razon else ("2" if "CORRIGE" in razon else "1")
+                if c.items:
+                    # NC por devolución: cantidades del set, precio (y % de línea) de la factura
+                    items = []
+                    for it in c.items:
+                        base = next((x for x in ref.items if x.nombre.upper() == it.nombre.upper()), ref.items[0])
+                        items.append(copia(base, it.cantidad))
+                else:
+                    # NC que anula la factura completa: mismos ítems y recargos globales
+                    items = [copia(x) for x in ref.items]
+                    recargos = list(ref.recargos_globales)
+            else:
+                # ND que anula la NC: mismos ítems, % de línea y recargos globales de la NC
+                items = [copia(x) for x in ref.items]
+                recargos = list(ref.recargos_globales)
+                cod_ref = "1"
+            doc = DocExp(c.tipo, siguiente_folio(c.tipo), fecha, items, ref.moneda, tipo_cambio, ref.receptor,
+                         AduanaExp(cod_mod_venta=ref.aduana.cod_mod_venta, cod_pais_recep=ref.aduana.cod_pais_recep,
+                                   cod_pais_destin=ref.aduana.cod_pais_destin),
+                         ind_servicio=ref.ind_servicio, fma_pag_exp=ref.fma_pag_exp,
+                         referencias=[RefExp(str(ref.tipo), str(ref.folio), fecha, cod_ref, c.razon_referencia[:90])],
+                         recargos_globales=recargos)
+        # Primera referencia siempre SET / CASO (instrucciones del set de pruebas)
+        doc.referencias.insert(0, RefExp("SET", c.numero.split("-")[-1], fecha, "", f"CASO {c.numero}"))
+        por_caso[c.numero] = doc
+        docs.append(doc)
+    return docs

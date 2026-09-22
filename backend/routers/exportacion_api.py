@@ -27,7 +27,8 @@ from fastapi.responses import JSONResponse
 from builders.envio_dte import CAF
 from exportacion import (
     MONEDAS, TIPO_NOMBRE_EXP, AduanaExp, ReceptorExp,
-    build_envio_exportacion, build_exportacion_dte, docs_simulacion, parse_envio_exportacion,
+    build_envio_exportacion, build_exportacion_dte, docs_desde_set, docs_simulacion,
+    parse_envio_exportacion, parse_set_exportacion,
 )
 from generator_exportacion import generate_pdf_exportacion
 from timestamped_output import get_timestamped_output_dir
@@ -170,6 +171,95 @@ async def exportacion_simulacion(
         "documentos": len(dtes), "pdfs_generados": len(resultados),
         "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
         "resultados": resultados, "zip_base64": zip_b64,
+    })
+
+
+@router.post("/exportacion/set")
+async def exportacion_set(
+    set_pruebas: UploadFile = File(..., description="SIISetDePruebas*.txt con SET BASICO DOCUMENTOS DE EXPORTACION"),
+    datos: UploadFile = File(...),
+    pfx: UploadFile = File(...),
+    caf_110: UploadFile = File(None),
+    caf_111: UploadFile = File(None),
+    caf_112: UploadFile = File(None),
+    folio_110: int = Form(None),
+    folio_111: int = Form(None),
+    folio_112: int = Form(None),
+    tipo_cambio: str = Form(...),
+    receptor_razon: str = Form("IMPORTADOR DE PRUEBA"),
+):
+    """Set de pruebas de exportación del SII → un EnvioDTE firmado por cada set
+    (el SII pide enviarlos por separado), PDFs y ZIP con una carpeta por set.
+    Los folios se consumen correlativos por tipo a través de todos los sets."""
+    from main import _parse_datos
+    emisor = _parse_datos(await datos.read())
+    pfx_bytes = await pfx.read()
+    try:
+        sets = parse_set_exportacion((await set_pruebas.read()).decode("iso-8859-1"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    tipos_necesarios = {c.tipo for s in sets for c in s.casos}
+    cafs = {}
+    for t, u in [(110, caf_110), (111, caf_111), (112, caf_112)]:
+        if t in tipos_necesarios:
+            cafs[t] = await _leer_caf(u, t, emisor["rut"])
+    folios_ini = {110: folio_110, 111: folio_111, 112: folio_112}
+    folios = {t: (folios_ini[t] or cafs[t].desde) for t in cafs}
+    tc = _dec(tipo_cambio, "tipo de cambio", True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    rut_clean = emisor["rut"].replace("-", "")
+    out_dir = get_timestamped_output_dir(_output_base(), prefix="exportacion_set")
+    zip_buf = io.BytesIO()
+    resumen, resultados = [], []
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for s in sets:
+            try:
+                docs = docs_desde_set(s, folios, timestamp[:10], tc, receptor_nombre=receptor_razon)
+                for d in docs:
+                    if not (cafs[d.tipo].desde <= d.folio <= cafs[d.tipo].hasta):
+                        raise ValueError(f"Set {s.nro_atencion}: folio {d.folio} T{d.tipo} fuera del CAF ({cafs[d.tipo].desde}-{cafs[d.tipo].hasta})")
+                dtes = [build_exportacion_dte(d, emisor, cafs[d.tipo], timestamp) for d in docs]
+                envio_xml = build_envio_exportacion(dtes, emisor, pfx_bytes, emisor["pfx_password"], timestamp)
+            except (ValueError, KeyError) as e:
+                raise HTTPException(422, f"Set {s.nro_atencion}: {e}")
+            except Exception as e:
+                raise HTTPException(500, f"Set {s.nro_atencion}: error generando: {e}")
+            # siguiente set continúa la numeración de folios
+            for d in docs:
+                folios[d.tipo] = max(folios[d.tipo], d.folio + 1)
+            carpeta = f"set_{s.nro_atencion}"
+            os.makedirs(os.path.join(out_dir, carpeta), exist_ok=True)
+            xml_name = f"{carpeta}/EnvioDTE_EXP_{rut_clean}_{s.nro_atencion}.xml"
+            zf.writestr(xml_name, envio_xml)
+            with open(os.path.join(out_dir, xml_name), "wb") as fh:
+                fh.write(envio_xml)
+            for dte in parse_envio_exportacion(envio_xml):
+                pdf_name = f"{carpeta}/DTE_T{dte.tipo}F{dte.folio}.pdf"
+                pdf_b = generate_pdf_exportacion(dte)
+                zf.writestr(pdf_name, pdf_b)
+                with open(os.path.join(out_dir, pdf_name), "wb") as fh:
+                    fh.write(pdf_b)
+                val = validate_pdf(pdf_b, pdf_name)
+                resultados.append({
+                    "folio": dte.folio, "tipo": dte.tipo, "tipo_nombre": TIPO_NOMBRE_EXP.get(dte.tipo, f"Tipo {dte.tipo}"),
+                    "cedible": False, "archivo": pdf_name, "set": s.nro_atencion,
+                    "validacion": {"aprobado": val.passed, "puntaje": val.score,
+                                   "checks": [{"nombre": c.name, "ok": c.passed, "detalle": c.detail} for c in val.checks]},
+                })
+            resumen.append({
+                "nro_atencion": s.nro_atencion, "nombre": s.nombre, "archivo": xml_name,
+                "casos": [{"numero": c.numero, "tipo": d.tipo, "folio": d.folio, "moneda": d.moneda,
+                           "mnt_total": str(d.mnt_total), "ind_servicio": d.ind_servicio, "fma_pag_exp": d.fma_pag_exp}
+                          for c, d in zip(s.casos, docs)],
+            })
+    zip_buf.seek(0)
+    aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
+    return JSONResponse({
+        "sets": resumen, "xsd_valido": True,
+        "documentos": sum(len(x["casos"]) for x in resumen), "pdfs_generados": len(resultados),
+        "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
+        "resultados": resultados, "zip_base64": base64.b64encode(zip_buf.getvalue()).decode(),
     })
 
 

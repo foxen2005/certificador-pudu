@@ -336,3 +336,23 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 **Reutilizado del set básico** (sin modificarlo): `CAF`, `build_ted`, `calc_totales` y `build_envio_dte` (la guía usa `<Documento>`, así que el empaquetado/firma es el mismo). Módulo propio: `guias.py`, `generator_guias.py`, `routers/guias_api.py` (`/adicionales/guias/set`, `/adicionales/guias/muestras`), UI en `/adicionales`.
 
 **Pendiente hasta tener respuesta del SII**: `TipoDespacho=3` en el traslado interno es interpretación del Formato (el set no lo dice); si el SII repara ese caso, probar omitiéndolo. `SII_pudu_Server` nunca emite `TipoDespacho`.
+
+---
+
+## 27. Exportación: SET BASICO DOCUMENTOS DE EXPORTACION (1) y (2) (v1.9.0, 2026-09-22)
+
+**Set real**: PUDU 78392059-K, N° atención 5089803 y 5089804 (`backend/docs/SetExportacion_ejemplo_78392059K.txt`). Dos sets en un archivo, **se envían por separado** (instrucción 4 del set). Formato: `DOCUMENTO FACTURA DE EXPORTACION ELECTRONICA`, tabla de ítems (`CANTIDAD / UNIDAD MEDIDA / PRECIO UNITARIO` o `VALOR LINEA` para servicios), y un bloque `CLAVE: valor` con moneda, forma de pago, modalidad, cláusula, total cláusula, vía, puertos, unidades de tara/peso, tipo y total de bultos, flete, seguro, país. NC solo con cantidades ("el precio unitario debe ser el mismo de la factura"); ND anula la NC.
+
+**Mapeo texto → código** (`aduana_tablas.py`, generado desde los seeds oficiales de Aduana en pos-matic_no): ARGENTINA 224, JAPON 331, ARICA 901, PUNTA ARENAS 912, BUENOS AIRES 262, YOKOHAMA 444, AEREO 4, MARITIMA 1, FOB 5, S/CL 6, A FIRME 1, CONSIGNACION CON MINIMO A FIRME 4, CONTENEDOR REFRIGERADO 75, ROLLOS 13, U 10, KN 6, PAR 17, LT 24, ACRED 2, SIN PAGO 21. `MIC` → TpoDocRef 810, `RESOLUCION SNA` → 812, `DUS` → 807, `AWB` → 809 (folio/fecha de esas referencias se inventan: "agregue otros datos que estime necesarios").
+
+**Reglas que impuso el XSD/Formato al construirlo** (todas descubiertas por la validación XSD local, no por el SII):
+- `MntTotal = 0` cuando `FmaPagExp = 21` (SIN PAGO) — Formato DTE, campo 124. `MntExe` y `MntExeOtrMnda` sí llevan el monto.
+- `TotClauVenta` ≥ 0.01: nunca usar `MntTotal` como default (sería 0 con SIN PAGO); usar el valor del set o `MntExe`.
+- `DescuentoMonto` / `RecargoMonto` de línea son `MntImpType` = **entero**, aunque los montos de exportación sean decimales. Se redondean y `MontoItem` se calcula con el entero.
+- Flete y seguro van en `MntFlete`/`MntSeguro` **y además** como dos `DscRcgGlobal` tipo R en `$` con `ValorDROtrMnda` (instrucción (**) del set). Las "comisiones en el extranjero 11% del total de la cláusula" son un tercer recargo global.
+- `IndServicio`: 3 cuando los ítems son "VALOR LINEA" (servicios; con eso `CodModVenta` deja de ser obligatorio y no se emite), 4 hotelería (caso con NACIONALIDAD y sin puertos: sin bloque Aduana, `Extranjero/Nacionalidad`).
+- Tara/pesos: el set solo da unidades; se informan valores por defecto (50 / 1000 / 950) en esas unidades.
+
+**Implementación**: `exportacion.py` (`parse_set_exportacion`, `docs_desde_set`, modelo con `valor_linea`, descuentos/recargos de línea y `RecargoGlobal`), `routers/exportacion_api.py` `/adicionales/exportacion/set` (un EnvioDTE por set, folios correlativos por tipo entre sets, ZIP con carpeta por set), UI "A · Set de pruebas del SII" en `/adicionales`.
+
+**Pendiente hasta la respuesta del SII**: `IndServicio 3/4`, `TipoDespacho`-like interpretaciones y los folios inventados de DUS/AWB/MIC/SNA son lectura del Formato; si el SII repara, ajustar y anotar aquí.
