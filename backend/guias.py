@@ -91,9 +91,13 @@ class CasoGuia:
 
     @property
     def tipo_despacho(self) -> int | None:
+        # Reparo real del SII (77334712-3, set 5089806, 2026-09-22): con
+        # IndTraslado=5 (interno) y TipoDespacho=3 → "Los Indicadores
+        # (Despacho/Traslado) No Corresponden". Los casos de venta (TipoDespacho
+        # 1 y 2) pasaron. Por eso: sin "TRASLADO POR" no se emite TipoDespacho.
         t = self.traslado_por.upper()
         if not t:
-            return 3 if self.ind_traslado == 5 else None
+            return None
         if "CLIENTE" in t and "EMISOR" not in t:
             return 1
         if "EMISOR" in t and ("CLIENTE" in t or "RECEPTOR" in t):

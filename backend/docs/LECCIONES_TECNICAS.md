@@ -335,7 +335,7 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 
 **Reutilizado del set básico** (sin modificarlo): `CAF`, `build_ted`, `calc_totales` y `build_envio_dte` (la guía usa `<Documento>`, así que el empaquetado/firma es el mismo). Módulo propio: `guias.py`, `generator_guias.py`, `routers/guias_api.py` (`/adicionales/guias/set`, `/adicionales/guias/muestras`), UI en `/adicionales`.
 
-**Pendiente hasta tener respuesta del SII**: `TipoDespacho=3` en el traslado interno es interpretación del Formato (el set no lo dice); si el SII repara ese caso, probar omitiéndolo. `SII_pudu_Server` nunca emite `TipoDespacho`.
+**Respuesta del SII (77334712-3, set 5089806, envío 259729604, 2026-09-22)**: SRH con un solo reparo, caso 1 (traslado interno): *"Los Indicadores (Despacho/Traslado) No Corresponden"*. Los casos de venta con `TipoDespacho` 1 y 2 pasaron. → Con `IndTraslado=5` **no se emite `TipoDespacho`** (corregido: solo se emite cuando el set trae "TRASLADO POR"). `SII_pudu_Server` nunca emite `TipoDespacho`, consistente con esto.
 
 ---
 
