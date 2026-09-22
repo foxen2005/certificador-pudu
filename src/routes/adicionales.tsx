@@ -397,7 +397,7 @@ function Exportacion({ shared }: { shared: Shared }) {
           {field("Ciudad", "receptorCiudad")}
           {field("País receptor (código Aduana)", "codPaisRecep", { requerido: true, placeholder: "ej. 225", inputMode: "numeric" })}
         </Fieldset>
-        <Fieldset legend="Aduana y transporte" hint="Opcionales para el XSD; el Manual de Muestras exige puertos, bultos y país en el PDF cuando hay transporte de mercaderías.">
+        <Fieldset legend="Aduana y transporte" hint="El SII acepta envíos con solo la modalidad de venta (par 110/112 de referencia aceptado en certificación). El resto es opcional para la validación automática, pero el Manual de Muestras exige puertos, bultos y país en el PDF cuando hay transporte de mercaderías.">
           {select("Cláusula de venta (CodClauVenta)", "codClauVenta", CLAU_VENTA)}
           {select("Vía de transporte (CodViaTransp)", "codViaTransp", VIA_TRANSP)}
           {field("Puerto de embarque (código)", "codPtoEmbarque", { inputMode: "numeric" })}

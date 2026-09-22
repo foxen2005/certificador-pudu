@@ -312,3 +312,10 @@ Ninguno de estos puntos fue rechazado por el SII en la certificación de PUDU (a
 **Validación XSD**: `xsd_validator.validar_envio_dte()` corre sobre cada EnvioDTE de exportación antes de devolverlo. De paso se comprobó que el EnvioDTE aprobado de PUDU (set básico) también valida — el endpoint `/adicionales/validar-xsd` sirve para cualquier tipo.
 
 **Pendiente**: parser del `SIISetDePruebas` de exportación (el SII lo genera por contribuyente; La Repostería 77334712-3 ya tiene CAF 110/111/112 del 2026-08-26 y puede bajarlo en maullin), tablas de Aduana completas, libro de ventas con 110/111/112.
+
+**Actualización 2026-09-22 — par 110/112 ACEPTADO por el SII**: `backend/docs/referencia_exportacion/dte110f202.xml` y `dte112f102.xml` (Siganet/Bicom, 76326028-3, ambiente certificación) fueron aceptados según quien los entregó. Lo que eso confirma para la validación automática del SII:
+- Aduana mínima = solo `CodModVenta` (sin cláusula, vía, país, puertos ni bultos).
+- `TpoMoneda` cualquiera del enum ("CHELIN") y `OtraMoneda` PESO CL con `TpoCambio=1`: el SII no cruza el tipo de cambio contra el Banco Central.
+- NC 112 `CodRef=1` → 110 aceptada como anulación.
+- Carátula con `RutReceptor 55555555-5`: eran envíos normales, no el set reportado (el set sigue con 60803000-K + referencia SET/CASO).
+Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manual pide puertos, bultos, país y moneda cuando hay mercadería) ni los casos del set de exportación.
