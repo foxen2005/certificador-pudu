@@ -337,7 +337,9 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 
 **Respuesta del SII (77334712-3, set 5089806, envío 259729604, 2026-09-22)**: SRH con un solo reparo, caso 1 (traslado interno): *"Los Indicadores (Despacho/Traslado) No Corresponden"*. Los casos de venta con `TipoDespacho` 1 y 2 pasaron. → Con `IndTraslado=5` **no se emite `TipoDespacho`** (corregido: solo se emite cuando el set trae "TRASLADO POR"). `SII_pudu_Server` nunca emite `TipoDespacho`, consistente con esto.
 
-**Simulación (Etapa 2) de guías** — `/adicionales/guias/simulacion`: mismos tipos de traslado que el set pero con productos y cliente reales (Manual de Certificación §6.2: "documentos … con datos representativos, paralelos de la operación real"). Usa el MISMO `build_guia_dte` con `referencia_set=False` (la referencia SET/CASO es exclusiva del set de pruebas), de modo que las reglas ya aceptadas por el SII se aplican igual: receptor = emisor y montos 0 en interno, `TipoDespacho` solo en venta, cedible solo en venta.
+**Simulación (Etapa 2) de guías** — `/adicionales/guias/simulacion`: mismos tipos de traslado que el set pero con productos y cliente reales (Manual de Certificación §6.2: "documentos … con datos representativos, paralelos de la operación real"). Usa el MISMO `build_guia_dte` con `referencia_set=False` (la referencia SET/CASO es exclusiva del set de pruebas), de modo que las reglas ya aceptadas por el SII se aplican igual: receptor = emisor y montos 0 en interno, `TipoDespacho` solo en venta, cedible solo en venta. Viene precargada con el producto y el receptor de prueba C&C SPA (`RECEPTOR_PRUEBA`), como la Etapa 2 del set básico.
+
+**Reparo HED-2-210 en la simulación** (77334712-3, folio 107, envío 259833126, 2026-09-22): *"Monto Neto No Cuadra con Detalle: [0.0000] <> [50000.0000]"*. El traslado interno emitía `MntTotal 0` en el encabezado pero el `Detalle` conservaba `PrcItem`/`MontoItem` con los precios que puso el usuario. En el set no se notaba porque sus ítems vienen sin precio. → Cuando `es_interno`, el detalle va **sin `PrcItem` y con `MontoItem 0`**, coherente con el encabezado.
 
 ---
 

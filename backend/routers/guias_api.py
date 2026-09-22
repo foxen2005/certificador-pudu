@@ -108,6 +108,18 @@ async def guias_set(
     })
 
 
+@router.get("/simulacion/defaults")
+async def guias_simulacion_defaults():
+    """Valores precargados de la simulación, para que la UI no los duplique."""
+    from main import RECEPTOR_PRUEBA
+    return {
+        "producto": "Mercadería de prueba", "cantidad": 20, "precio": 2500,
+        "traslados": [5, 1], "tipo_despacho": 2,
+        "receptor": {"rut": RECEPTOR_PRUEBA["rut"], "razon_social": RECEPTOR_PRUEBA["razon_social"],
+                     "giro": RECEPTOR_PRUEBA["giro"], "dir": RECEPTOR_PRUEBA["dir"], "cmna": RECEPTOR_PRUEBA["cmna"]},
+    }
+
+
 @router.post("/simulacion")
 async def guias_simulacion(
     datos: UploadFile = File(...),
@@ -116,26 +128,41 @@ async def guias_simulacion(
     folio_inicial_52: int = Form(..., description="Obligatorio: la simulación debe usar folios distintos de los del set"),
     traslados: str = Form("5,1", description="Tipos de traslado separados por coma (1 venta, 5 interno, …)"),
     tipo_despacho: int = Form(None, description="1 cliente, 2 emisor al local del cliente, 3 emisor a otras instalaciones"),
-    producto: str = Form(..., description="Producto real del contribuyente"),
-    cantidad: int = Form(1),
-    precio: int = Form(...),
+    producto: str = Form("Mercadería de prueba", description="Producto real del contribuyente"),
+    cantidad: int = Form(20),
+    precio: int = Form(2500),
     producto_2: str = Form(""),
     cantidad_2: int = Form(0),
     precio_2: int = Form(0),
-    receptor_rut: str = Form(..., description="RUT del cliente real (con guión)"),
-    receptor_razon: str = Form(...),
+    # Por defecto, el mismo receptor de prueba que usa la Etapa 2 del set básico
+    # (RECEPTOR_PRUEBA en main.py): C&C SPA. Se puede reemplazar por un cliente real.
+    receptor_rut: str = Form("", description="RUT del cliente (con guión); vacío = receptor de prueba C&C SPA"),
+    receptor_razon: str = Form(""),
     receptor_giro: str = Form(""),
     receptor_dir: str = Form(""),
     receptor_cmna: str = Form(""),
 ):
     """Etapa 2 — Simulación de guías: mismos tipos de traslado que el set, pero
-    con los productos y el cliente reales del contribuyente (Manual de
-    Certificación §6.2). Sin referencia SET/CASO."""
-    from main import _parse_datos
+    con datos propios en vez del .txt del SII. Viene precargada con el producto
+    y el receptor de prueba (igual que la Etapa 2 del set básico) y se pueden
+    reemplazar por la operación real, que es lo que pide el Manual de
+    Certificación §6.2. Sin referencia SET/CASO."""
+    from main import RECEPTOR_PRUEBA, _parse_datos
     emisor = _parse_datos(await datos.read())
     pfx_bytes = await pfx.read()
+    if not receptor_rut.strip():
+        # Todo o nada: con el RUT de prueba van también su razón social, giro y
+        # dirección. Mezclarlo con datos parciales del llamador emitiría el RUT
+        # de C&C SPA bajo otra razón social (y el folio ya quedaría consumido).
+        receptor_rut = RECEPTOR_PRUEBA["rut"]
+        receptor_razon = RECEPTOR_PRUEBA["razon_social"]
+        receptor_giro = RECEPTOR_PRUEBA["giro"]
+        receptor_dir = RECEPTOR_PRUEBA["dir"]
+        receptor_cmna = RECEPTOR_PRUEBA["cmna"]
     if not _RUT_RE.match(receptor_rut.strip()):
         raise HTTPException(422, f"RUT del receptor '{receptor_rut}' no tiene formato válido (ej. 77221286-0)")
+    if not receptor_razon.strip():
+        raise HTTPException(422, "Falta la razón social del receptor")
     try:
         tipos = [int(t) for t in traslados.replace(" ", "").split(",") if t]
     except ValueError:

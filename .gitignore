@@ -44,3 +44,4 @@ Thumbs.db
 # Build output (Cloudflare Workers)
 .output/
 .wrangler/
+graphify-out/

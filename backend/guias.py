@@ -26,7 +26,7 @@ Reglas (Formato DTE v2.5 + instrucciones del propio set):
   8 traslado para exportación, 9 venta para exportación. Se deduce del MOTIVO.
 - `TipoDespacho`: 1 por cuenta del receptor (cliente), 2 por cuenta del emisor a
   instalaciones del cliente, 3 por cuenta del emisor a otras instalaciones.
-  Se deduce de "TRASLADO POR"; traslado interno entre bodegas → 3.
+  Se deduce de "TRASLADO POR"; en traslado interno NO se emite (reparo del SII).
 - Traslado interno: "los datos del receptor deben coincidir con los del emisor",
   sin precios (MontoItem 0, MntTotal 0) y sin ejemplar cedible ("inoficioso").
 - Venta: montos neto/IVA/total como una factura; lleva cedible
@@ -249,9 +249,15 @@ def build_guia_dte(caso: CasoGuia, folio: int, emisor: dict, receptor: dict,
         etree.SubElement(DET, "NroLinDet").text = str(i)
         etree.SubElement(DET, "NmbItem").text = it.nombre[:80]
         etree.SubElement(DET, "QtyItem").text = str(int(it.cantidad))
-        if it.precio_unitario > 0:
+        # Traslado interno: el encabezado va en 0, así que el detalle TAMBIÉN
+        # debe ir sin precio y con MontoItem 0. Con precios en el detalle y
+        # MntTotal 0 el SII repara con HED-2-210 "Monto Neto No Cuadra con
+        # Detalle" (reparo real 77334712-3 folio 107, envío 259833126,
+        # 2026-09-22). En el set no se notó porque sus ítems vienen sin precio.
+        if not caso.es_interno and it.precio_unitario > 0:
             etree.SubElement(DET, "PrcItem").text = str(int(it.precio_unitario))
-        etree.SubElement(DET, "MontoItem").text = str(round(it.cantidad * it.precio_unitario))
+        monto = 0 if caso.es_interno else round(it.cantidad * it.precio_unitario)
+        etree.SubElement(DET, "MontoItem").text = str(monto)
 
     # La referencia SET/CASO es exclusiva del set de pruebas; la simulación son
     # documentos de la operación real y no la lleva.
@@ -350,7 +356,9 @@ def parse_envio_guias(xml_bytes: bytes) -> list[GuiaParsed]:
 # documentos "correspondientes a su facturación de los últimos 2 meses … con
 # datos representativos, paralelos de la operación real del contribuyente".
 # Para guías eso significa los mismos tipos de traslado que usará en producción,
-# pero con sus productos, precios y receptor reales — no los del set.
+# con sus productos, precios y receptor — no los del set. Los valores vienen
+# precargados (ver `/adicionales/guias/simulacion/defaults`) y el contribuyente
+# los reemplaza por los de su operación real antes de enviar.
 #
 # Se construyen `CasoGuia` sintéticos para pasar por el MISMO builder que el
 # set (`build_guia_dte`), de modo que las reglas ya aceptadas por el SII

@@ -622,6 +622,9 @@ function Guias({ shared }: { shared: Shared }) {
   const [xmlMuestras, setXmlMuestras] = useState<File | null>(null);
   const [muestras, setMuestras] = useState<BatchResult | null>(null);
   const [loadingM, setLoadingM] = useState(false);
+  // Los datos precargados los sirve el backend (`/simulacion/defaults`), que es
+  // el dueño del receptor de prueba de la Etapa 2 del set básico: así no se
+  // duplican aquí y no se desincronizan.
   const [sim, setSim] = useState({
     folio: "",
     traslados: ["5", "1"] as string[],
@@ -638,6 +641,33 @@ function Guias({ shared }: { shared: Shared }) {
     receptorDir: "",
     receptorCmna: "",
   });
+
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/sii/adicionales/guias/simulacion/defaults", { headers: { [WIZARD_KEY_HEADER]: encodeURIComponent(shared.clave) } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { producto: string; cantidad: number; precio: number; traslados: number[]; tipo_despacho: number;
+                  receptor: { rut: string; razon_social: string; giro: string; dir: string; cmna: string } } | null) => {
+        if (!d || cancelado) return;
+        setSim((s) => ({
+          ...s,
+          producto: s.producto || d.producto,
+          cantidad: s.cantidad === "1" ? String(d.cantidad) : s.cantidad,
+          precio: s.precio || String(d.precio),
+          traslados: s.traslados.length ? s.traslados : d.traslados.map(String),
+          tipoDespacho: s.tipoDespacho || String(d.tipo_despacho),
+          receptorRut: s.receptorRut || d.receptor.rut,
+          receptorRazon: s.receptorRazon || d.receptor.razon_social,
+          receptorGiro: s.receptorGiro || d.receptor.giro,
+          receptorDir: s.receptorDir || d.receptor.dir,
+          receptorCmna: s.receptorCmna || d.receptor.cmna,
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, [shared.clave]);
   const [resultSim, setResultSim] = useState<GuiaResult | null>(null);
   const [loadingSim, setLoadingSim] = useState(false);
   const [errorSim, setErrorSim] = useState("");
@@ -803,8 +833,11 @@ function Guias({ shared }: { shared: Shared }) {
         <CardHeader className="pb-3">
           <CardTitle className="text-base">B · Simulación (Etapa 2) — datos reales</CardTitle>
           <CardDescription>
-            Mismos tipos de traslado que el set, pero con los productos y el cliente reales de la empresa: el Manual de
-            Certificación pide documentos "representativos, paralelos de la operación real". No llevan referencia SET/CASO.
+            Mismos tipos de traslado que el set, pero sin el <code className="rounded bg-muted px-1">.txt</code>: viene precargado con el
+            producto y el receptor de prueba (C&amp;C SPA), igual que la Etapa 2 del set básico, y puedes reemplazarlos por la
+            operación real de la empresa — el Manual de Certificación pide documentos "representativos, paralelos de la
+            operación real". No llevan referencia SET/CASO. En el traslado interno el detalle va sin precio y en 0 (el SII
+            repara con HED-2-210 si el encabezado va en 0 y el detalle valorizado).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
