@@ -191,7 +191,7 @@ type CafSlot = { file: File | null; rango: { desde: number; hasta: number } | nu
 const cafVacio = (): CafSlot => ({ file: null, rango: null, error: "", folio: "" });
 
 function CafConFolio({ tipo, label, icon, slot, onChange }: {
-  tipo: 110 | 111 | 112;
+  tipo: 52 | 110 | 111 | 112;
   label: string;
   icon: string;
   slot: CafSlot;
@@ -481,6 +481,162 @@ function Exportacion({ shared }: { shared: Shared }) {
   );
 }
 
+// ─── Guía de Despacho 52 ─────────────────────────────────────────────────────
+
+interface GuiaResult extends BatchResult {
+  nro_atencion?: string;
+  casos?: { numero: string; folio: number; motivo: string; ind_traslado: number; tipo_despacho: number | null; cedible: boolean }[];
+}
+
+function Guias({ shared }: { shared: Shared }) {
+  const [setF, setSetF] = useState<File | null>(null);
+  const [caf, setCaf] = useState<CafSlot>(cafVacio());
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<GuiaResult | null>(null);
+  const [error, setError] = useState("");
+  const [xmlMuestras, setXmlMuestras] = useState<File | null>(null);
+  const [muestras, setMuestras] = useState<BatchResult | null>(null);
+  const [loadingM, setLoadingM] = useState(false);
+
+  const folioNum = Number(caf.folio);
+  const folioOk = !caf.rango || caf.folio.trim() === "" || (folioNum >= caf.rango.desde && folioNum <= caf.rango.hasta);
+  const listo = !!setF && !!caf.file && !!caf.rango && !caf.error && folioOk;
+
+  async function generar() {
+    setLoading(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("set_pruebas", setF!);
+      fd.append("datos", shared.datos);
+      fd.append("pfx", shared.pfx);
+      fd.append("caf_52", caf.file!);
+      if (caf.folio.trim()) fd.append("folio_inicial_52", caf.folio.trim());
+      setResult((await postForm("/api/sii/adicionales/guias/set", fd, shared.clave)) as GuiaResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generarMuestras() {
+    setLoadingM(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("envio", xmlMuestras!);
+      setMuestras((await postForm("/api/sii/adicionales/guias/muestras", fd, shared.clave)) as BatchResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingM(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><Truck className="h-5 w-5 text-primary" /> Guía de Despacho (52) — Set de pruebas</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Sube el <strong>SET GUÍA DE DESPACHO</strong> que entrega el SII (mismo archivo <code className="rounded bg-muted px-1">SIISetDePruebas*.txt</code>).
+          Por cada caso se deduce el tipo de traslado (<code className="rounded bg-muted px-1">IndTraslado</code>) del MOTIVO y el tipo de despacho
+          (<code className="rounded bg-muted px-1">TipoDespacho</code>) de "TRASLADO POR". En traslado interno el receptor es la propia empresa y no hay
+          precios ni cedible; en venta va neto/IVA/total y cedible "CEDIBLE CON SU FACTURA".
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <UploadBox label="SIISetDePruebas*.txt" hint="Debe contener 'SET GUIA DE DESPACHO - NUMERO DE ATENCIÓN'" icon="📋" accept=".txt" file={setF} onChange={setSetF} />
+        <CafConFolio tipo={52} label="CAF Guía de Despacho" icon="🚚" slot={caf} onChange={setCaf} />
+      </div>
+
+      <Alert className="border-amber-300 bg-amber-50 text-amber-900 [&>svg]:text-amber-700">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          Se consumen tantos folios como casos tenga el set (normalmente 3), correlativos desde el folio inicial. Un folio ya
+          enviado al SII no se reutiliza (DTE-3-100). Guarda el ZIP: los PDF de muestra deben salir de este mismo XML.
+        </AlertDescription>
+      </Alert>
+
+      <Button size="lg" disabled={!listo || loading} onClick={generar}>
+        {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando y validando contra XSD…</> : "Generar guías del set"}
+      </Button>
+
+      {error && (
+        <Alert variant="destructive" role="alert">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {result && (
+        <div className="space-y-5">
+          <div className="flex items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-4 py-3">
+            <CheckCircle2 className="h-5 w-5 text-success" />
+            <div className="flex-1 text-sm">
+              <strong>EnvioDTE de guías generado y válido según XSD</strong> — N° atención {result.nro_atencion}. Descarga y guarda el ZIP.
+            </div>
+            <Button size="sm" variant="outline" onClick={() => downloadB64(result.zip_base64 ?? "", "guias_set.zip")}>
+              <Download className="mr-1 h-4 w-4" /> Descargar ZIP
+            </Button>
+          </div>
+          {result.casos && (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/60 text-left">
+                  <tr><th className="p-2">Caso</th><th className="p-2">Folio</th><th className="p-2">Motivo</th><th className="p-2">IndTraslado</th><th className="p-2">TipoDespacho</th><th className="p-2">Cedible</th></tr>
+                </thead>
+                <tbody>
+                  {result.casos.map((c) => (
+                    <tr key={c.numero} className="border-t">
+                      <td className="p-2 font-mono">{c.numero}</td><td className="p-2 font-mono">{c.folio}</td><td className="p-2">{c.motivo}</td>
+                      <td className="p-2">{c.ind_traslado}</td><td className="p-2">{c.tipo_despacho ?? "—"}</td><td className="p-2">{c.cedible ? "sí" : "no"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <PortalGuide
+            title="Subir al portal SII"
+            url="https://maullin.sii.cl/cgi_dte/UPL/DTEUpload"
+            steps={[
+              { text: "Certificación DTE → Envío de Documentos → subir EnvioDTE_GUIAS_{RUT}.xml", highlight: true },
+              { text: "Esperar EPR + AOK en los 3 documentos; luego declarar el set en 'Revisión del Set'" },
+              { text: "Muestras impresas: subir los PDF de este mismo ZIP (tributario de los 3, cedible solo de las ventas)", highlight: true },
+            ]}
+          />
+          <Results data={result} filename="guias_set.zip" />
+        </div>
+      )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Muestras impresas desde un EnvioDTE de guías ya enviado</CardTitle>
+          <CardDescription>Sube el <code className="rounded bg-muted px-1">EnvioDTE_GUIAS_*.xml</code> que aprobó el SII y genera los PDFs.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="max-w-sm">
+            <UploadBox label="EnvioDTE de guías" hint="XML firmado subido al SII" icon="📄" accept=".xml" file={xmlMuestras} onChange={setXmlMuestras} />
+          </div>
+          <Button variant="outline" disabled={!xmlMuestras || loadingM} onClick={generarMuestras}>
+            {loadingM ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando PDFs…</> : "Generar PDFs de muestra"}
+          </Button>
+          {muestras && (
+            <div className="space-y-3">
+              <Button size="sm" variant="outline" onClick={() => downloadB64(muestras.zip_base64 ?? "", "guias_muestras.zip")}>
+                <Download className="mr-1 h-4 w-4" /> Descargar {muestras.pdfs_generados} PDFs
+              </Button>
+              <Results data={muestras} filename="guias_muestras.zip" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Módulos pendientes de set ───────────────────────────────────────────────
 
 function Pendiente({ titulo, icon, detalle }: { titulo: string; icon: ReactNode; detalle: string }) {
@@ -509,7 +665,7 @@ function Pendiente({ titulo, icon, detalle }: { titulo: string; icon: ReactNode;
 
 const MODULOS = [
   { key: "exportacion", label: "Exportación (110/111/112)", Icon: Globe, estado: "disponible" },
-  { key: "guia", label: "Guía de Despacho (52)", Icon: Truck, estado: "requiere set" },
+  { key: "guia", label: "Guía de Despacho (52)", Icon: Truck, estado: "disponible" },
   { key: "exenta", label: "Factura Exenta (34)", Icon: FileText, estado: "requiere set" },
 ] as const;
 type ModKey = (typeof MODULOS)[number]["key"];
@@ -571,13 +727,7 @@ function Adicionales() {
         <main className="min-w-0 flex-1 space-y-6">
           {!shared && <Setup onDone={setShared} />}
           {shared && mod === "exportacion" && <Exportacion shared={shared} />}
-          {shared && mod === "guia" && (
-            <Pendiente
-              icon={<Truck className="h-5 w-5 text-primary" />}
-              titulo="Guía de Despacho (52)"
-              detalle="Requiere el SET GUÍA DE DESPACHO del SII (casos con tipo de traslado 1-9, datos de transporte y Libro de Guías). Aún no tenemos un set real para construirlo; el generador ya emite IndTraslado pero no el bloque Transporte ni el LibroGuia."
-            />
-          )}
+          {shared && mod === "guia" && <Guias shared={shared} />}
           {shared && mod === "exenta" && (
             <Pendiente
               icon={<FileText className="h-5 w-5 text-primary" />}

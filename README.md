@@ -126,7 +126,9 @@ Módulos aparte del set básico, uno por tipo de documento con set propio del SI
 - **Exportación 110/111/112** — funcional: genera T110→T112→T111 con `<Exportaciones>`, Aduana,
   `TpoMoneda`/`OtraMoneda`, valida contra el XSD oficial (`backend/schemas/`) y genera PDFs.
   Backend en `backend/exportacion.py` + `routers/exportacion_api.py`; lección 25.
-- **Guía de Despacho 52** y **Factura Exenta 34** — visibles, requieren el set de pruebas del SII.
+- **Guía de Despacho 52** — funcional: parsea el SET GUIA DE DESPACHO (motivo → IndTraslado, traslado por →
+  TipoDespacho), receptor = emisor en traslado interno, cedible solo en ventas. `backend/guias.py`; lección 26.
+- **Factura Exenta 34** — visible, requiere el set de pruebas del SII.
 - **Factura de Compra 46** — ya está en el wizard principal (Etapa 1 CAF + Etapa 2 modo compra).
 
 ### Certificar otra empresa

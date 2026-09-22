@@ -128,7 +128,9 @@ app.add_middleware(
 # en routers/, no toca los endpoints del set básico. Import tardío porque el
 # router reutiliza _parse_datos/OUTPUT_BASE_DIR definidos más abajo.
 from routers.exportacion_api import router as _exportacion_router  # noqa: E402
+from routers.guias_api import router as _guias_router  # noqa: E402
 app.include_router(_exportacion_router)
+app.include_router(_guias_router)
 
 
 RECEPTOR_PRUEBA = {

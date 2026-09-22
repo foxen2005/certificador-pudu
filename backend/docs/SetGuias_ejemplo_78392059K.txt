@@ -1,0 +1,36 @@
+--------------------------------------------------------------------------------
+SET GUIA DE DESPACHO - NUMERO DE ATENCIÓN: 5089739
+
+IMPORTANTE: Se debe señalar el tipo de traslado en todos los documentos de Guía de Despacho Electrónica. Además, se les indica que cuando una Guía de Despacho Electrónica señala un Traslado Interno, los datos del receptor deben coincidir con los del emisor, además una operación que no constituye venta, el ejemplar cedible es inoficioso.
+
+CASO 5089739-1
+==============
+DOCUMENTO	GUIA DE DESPACHO
+MOTIVO:		TRASLADO DE MATERIALES ENTRE BODEGAS DE LA EMPRESA
+
+ITEM		CANTIDAD	
+ITEM 1		     59		
+ITEM 2		     67		
+ITEM 3		     34
+
+
+CASO 5089739-2
+==============
+DOCUMENTO	GUIA DE DESPACHO
+MOTIVO:		VENTA
+TRASLADO POR: 	EMISOR DEL DOCUMENTO AL LOCAL DEL CLIENTE
+
+ITEM		CANTIDAD	PRECIO UNITARIO
+ITEM 1		    122		   2944
+ITEM 2		    226		   1063
+
+
+CASO 5089739-3
+==============
+DOCUMENTO	GUIA DE DESPACHO
+MOTIVO:		VENTA
+TRASLADO POR: 	CLIENTE
+
+ITEM		CANTIDAD	PRECIO UNITARIO
+ITEM 1		    100		   1260
+ITEM 2		    157		   2348

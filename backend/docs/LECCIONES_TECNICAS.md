@@ -319,3 +319,20 @@ Ninguno de estos puntos fue rechazado por el SII en la certificación de PUDU (a
 - NC 112 `CodRef=1` → 110 aceptada como anulación.
 - Carátula con `RutReceptor 55555555-5`: eran envíos normales, no el set reportado (el set sigue con 60803000-K + referencia SET/CASO).
 Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manual pide puertos, bultos, país y moneda cuando hay mercadería) ni los casos del set de exportación.
+
+---
+
+## 26. Guía de Despacho (52): SET GUIA DE DESPACHO (v1.8.0, 2026-09-22)
+
+**Set real**: PUDU 78392059-K, N° atención 5089739 (`backend/docs/SetGuias_ejemplo_78392059K.txt`). Formato distinto al set básico: `DOCUMENTO GUIA DE DESPACHO` (sin "ELECTRONICA"), `MOTIVO:` y `TRASLADO POR:` en texto, ítems con cantidad y (solo en venta) precio. No trae libro de guías.
+
+**Mapeo** (`guias.py`, Formato DTE v2.5):
+- MOTIVO → `IndTraslado`: "TRASLADO … ENTRE BODEGAS" → 5 (interno); "VENTA" → 1; devolución 7; consignación 3; gratuita 4; por efectuar 2; exportación 8/9; otro 6.
+- TRASLADO POR → `TipoDespacho`: "CLIENTE" → 1 (por cuenta del receptor); "EMISOR … AL LOCAL DEL CLIENTE" → 2; interno → 3 (emisor a otras instalaciones).
+- Traslado interno: receptor = emisor (instrucción literal del set), `MontoItem 0`, `MntTotal 0`, sin `PrcItem`, **sin cedible** ("inoficioso").
+- Venta: `MntNeto/TasaIVA/IVA/MntTotal` como factura; PDF tributario + cedible "CEDIBLE CON SU FACTURA" con acuse de recibo (Manual de Muestras §1.4).
+- Referencia `SET` / `CASO n-n` en línea 1, igual que el set básico.
+
+**Reutilizado del set básico** (sin modificarlo): `CAF`, `build_ted`, `calc_totales` y `build_envio_dte` (la guía usa `<Documento>`, así que el empaquetado/firma es el mismo). Módulo propio: `guias.py`, `generator_guias.py`, `routers/guias_api.py` (`/adicionales/guias/set`, `/adicionales/guias/muestras`), UI en `/adicionales`.
+
+**Pendiente hasta tener respuesta del SII**: `TipoDespacho=3` en el traslado interno es interpretación del Formato (el set no lo dice); si el SII repara ese caso, probar omitiéndolo. `SII_pudu_Server` nunca emite `TipoDespacho`.
