@@ -596,6 +596,23 @@ interface GuiaResult extends BatchResult {
   casos?: { numero: string; folio: number; motivo: string; ind_traslado: number; tipo_despacho: number | null; cedible: boolean }[];
 }
 
+// Tabla "Indicador Tipo de traslado de bienes" del Formato DTE v2.5
+const TRASLADOS = [
+  ["1", "1 — Operación constituye venta"],
+  ["2", "2 — Ventas por efectuar"],
+  ["3", "3 — Consignaciones"],
+  ["4", "4 — Entrega gratuita"],
+  ["5", "5 — Traslado interno"],
+  ["6", "6 — Otros traslados no venta"],
+  ["7", "7 — Devolución de mercaderías"],
+];
+const DESPACHOS = [
+  ["", "— (sin indicar)"],
+  ["1", "1 — Por cuenta del receptor (cliente)"],
+  ["2", "2 — Por cuenta del emisor, al local del cliente"],
+  ["3", "3 — Por cuenta del emisor, a otras instalaciones"],
+];
+
 function Guias({ shared }: { shared: Shared }) {
   const [setF, setSetF] = useState<File | null>(null);
   const [caf, setCaf] = useState<CafSlot>(cafVacio());
@@ -605,6 +622,67 @@ function Guias({ shared }: { shared: Shared }) {
   const [xmlMuestras, setXmlMuestras] = useState<File | null>(null);
   const [muestras, setMuestras] = useState<BatchResult | null>(null);
   const [loadingM, setLoadingM] = useState(false);
+  const [sim, setSim] = useState({
+    folio: "",
+    traslados: ["5", "1"] as string[],
+    tipoDespacho: "2",
+    producto: "",
+    cantidad: "1",
+    precio: "",
+    producto2: "",
+    cantidad2: "1",
+    precio2: "",
+    receptorRut: "",
+    receptorRazon: "",
+    receptorGiro: "",
+    receptorDir: "",
+    receptorCmna: "",
+  });
+  const [resultSim, setResultSim] = useState<GuiaResult | null>(null);
+  const [loadingSim, setLoadingSim] = useState(false);
+  const [errorSim, setErrorSim] = useState("");
+  const setS = (k: keyof typeof sim) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setSim((s) => ({ ...s, [k]: e.target.value }));
+  const simEsVenta = sim.traslados.some((t) => ["1", "2", "9"].includes(t));
+  const simFolioOk = sim.folio.trim() !== "" && (!caf.rango || (Number(sim.folio) >= caf.rango.desde && Number(sim.folio) + sim.traslados.length - 1 <= caf.rango.hasta));
+  const simListo =
+    !!caf.file && !!caf.rango && !caf.error && sim.traslados.length > 0 && simFolioOk &&
+    sim.producto.trim() !== "" && sim.precio.trim() !== "" &&
+    sim.receptorRut.trim() !== "" && sim.receptorRazon.trim() !== "" &&
+    (!simEsVenta || (sim.receptorGiro.trim() !== "" && sim.receptorDir.trim() !== "" && sim.receptorCmna.trim() !== ""));
+
+  async function generarSim() {
+    setLoadingSim(true);
+    setErrorSim("");
+    setResultSim(null);   // no dejar a la vista un resultado viejo si falla
+    try {
+      const fd = new FormData();
+      fd.append("datos", shared.datos);
+      fd.append("pfx", shared.pfx);
+      fd.append("caf_52", caf.file!);
+      if (sim.folio.trim()) fd.append("folio_inicial_52", sim.folio.trim());
+      fd.append("traslados", sim.traslados.join(","));
+      if (sim.tipoDespacho) fd.append("tipo_despacho", sim.tipoDespacho);
+      fd.append("producto", sim.producto);
+      fd.append("cantidad", sim.cantidad || "1");
+      fd.append("precio", sim.precio);
+      if (sim.producto2.trim()) {
+        fd.append("producto_2", sim.producto2);
+        fd.append("cantidad_2", sim.cantidad2 || "1");
+        fd.append("precio_2", sim.precio2 || "0");
+      }
+      fd.append("receptor_rut", sim.receptorRut);
+      fd.append("receptor_razon", sim.receptorRazon);
+      fd.append("receptor_giro", sim.receptorGiro);
+      fd.append("receptor_dir", sim.receptorDir);
+      fd.append("receptor_cmna", sim.receptorCmna);
+      setResultSim((await postForm("/api/sii/adicionales/guias/simulacion", fd, shared.clave)) as GuiaResult);
+    } catch (e) {
+      setErrorSim((e as Error).message);
+    } finally {
+      setLoadingSim(false);
+    }
+  }
 
   const folioNum = Number(caf.folio);
   const folioOk = !caf.rango || caf.folio.trim() === "" || (folioNum >= caf.rango.desde && folioNum <= caf.rango.hasta);
@@ -645,12 +723,11 @@ function Guias({ shared }: { shared: Shared }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="flex items-center gap-2 text-lg font-semibold"><Truck className="h-5 w-5 text-primary" /> Guía de Despacho (52) — Set de pruebas</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><Truck className="h-5 w-5 text-primary" /> Guía de Despacho (52)</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Sube el <strong>SET GUÍA DE DESPACHO</strong> que entrega el SII (mismo archivo <code className="rounded bg-muted px-1">SIISetDePruebas*.txt</code>).
-          Por cada caso se deduce el tipo de traslado (<code className="rounded bg-muted px-1">IndTraslado</code>) del MOTIVO y el tipo de despacho
-          (<code className="rounded bg-muted px-1">TipoDespacho</code>) de "TRASLADO POR". En traslado interno el receptor es la propia empresa y no hay
-          precios ni cedible; en venta va neto/IVA/total y cedible "CEDIBLE CON SU FACTURA".
+          <strong>A · Set de pruebas</strong> con el archivo del SII, y <strong>B · Simulación</strong> con tus productos y cliente reales.
+          En ambos, el traslado interno lleva al propio emisor como receptor, sin precios ni cedible ni <code className="rounded bg-muted px-1">TipoDespacho</code>;
+          la venta lleva neto/IVA/total y cedible "CEDIBLE CON SU FACTURA".
         </p>
       </div>
 
@@ -663,9 +740,12 @@ function Guias({ shared }: { shared: Shared }) {
         <AlertTriangle className="h-4 w-4" />
         <AlertDescription>
           Se consumen tantos folios como casos tenga el set (normalmente 3), correlativos desde el folio inicial. Un folio ya
-          enviado al SII no se reutiliza (DTE-3-100). Guarda el ZIP: los PDF de muestra deben salir de este mismo XML.
+          enviado al SII no se reutiliza (DTE-3-100), y el set y la simulación consumen folios distintos. Guarda cada ZIP:
+          los PDF de muestra deben salir del mismo XML que subas.
         </AlertDescription>
       </Alert>
+
+      <h3 className="text-base font-semibold">A · Set de pruebas del SII</h3>
 
       <Button size="lg" disabled={!listo || loading} onClick={generar}>
         {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando y validando contra XSD…</> : "Generar guías del set"}
@@ -718,6 +798,148 @@ function Guias({ shared }: { shared: Shared }) {
           <Results data={result} filename="guias_set.zip" />
         </div>
       )}
+
+      <Card className="border-primary/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">B · Simulación (Etapa 2) — datos reales</CardTitle>
+          <CardDescription>
+            Mismos tipos de traslado que el set, pero con los productos y el cliente reales de la empresa: el Manual de
+            Certificación pide documentos "representativos, paralelos de la operación real". No llevan referencia SET/CASO.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Fieldset legend="Documentos a generar" hint="Se emite una guía por cada tipo de traslado marcado, con el mismo detalle.">
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Tipos de traslado</Label>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {TRASLADOS.map(([v, l]) => (
+                  <label key={v} className="flex items-center gap-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-input"
+                      checked={sim.traslados.includes(v)}
+                      onChange={(e) =>
+                        setSim((s) => ({ ...s, traslados: e.target.checked ? [...s.traslados, v] : s.traslados.filter((x) => x !== v) }))
+                      }
+                    />
+                    {l}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-desp">Tipo de despacho (solo ventas)</Label>
+              <select id="sim-desp" value={sim.tipoDespacho} onChange={setS("tipoDespacho")} className={SELECT_CLASS}>
+                {DESPACHOS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-folio">Folio inicial T52<span className="text-destructive"> *</span></Label>
+              <Input id="sim-folio" type="number" min={caf.rango?.desde ?? 1} max={caf.rango?.hasta} placeholder={caf.rango ? `${caf.rango.desde}–${caf.rango.hasta}` : "primer folio del CAF"} value={sim.folio} onChange={setS("folio")} required aria-required aria-invalid={sim.folio.trim() !== "" && !simFolioOk} />
+              <p className="text-[11px] text-muted-foreground">Debe ser distinto de los folios usados en el set (A).</p>
+            </div>
+          </Fieldset>
+          <Fieldset legend="Detalle (productos reales)">
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor="sim-prod">Producto<span className="text-destructive"> *</span></Label>
+              <Input id="sim-prod" value={sim.producto} onChange={setS("producto")} placeholder="ej. Torta de mil hojas 20 porciones" required aria-required />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="sim-cant">Cantidad</Label>
+                <Input id="sim-cant" type="number" min={1} value={sim.cantidad} onChange={setS("cantidad")} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="sim-prec">Precio<span className="text-destructive"> *</span></Label>
+                <Input id="sim-prec" type="number" min={0} value={sim.precio} onChange={setS("precio")} required aria-required />
+              </div>
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor="sim-prod2">Segundo producto (opcional)</Label>
+              <Input id="sim-prod2" value={sim.producto2} onChange={setS("producto2")} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="sim-cant2">Cantidad</Label>
+                <Input id="sim-cant2" type="number" min={1} value={sim.cantidad2} onChange={setS("cantidad2")} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="sim-prec2">Precio</Label>
+                <Input id="sim-prec2" type="number" min={0} value={sim.precio2} onChange={setS("precio2")} />
+              </div>
+            </div>
+          </Fieldset>
+          <Fieldset legend="Cliente real" hint={simEsVenta
+            ? "Guías de venta: el Manual de Muestras exige giro, dirección y comuna impresos. En el traslado interno se ignora (el receptor es la propia empresa)."
+            : "En el traslado interno se ignora: el receptor es la propia empresa."}>
+            <div className="space-y-1">
+              <Label htmlFor="sim-rut">RUT<span className="text-destructive"> *</span></Label>
+              <Input id="sim-rut" value={sim.receptorRut} onChange={setS("receptorRut")} placeholder="76746877-6" required aria-required />
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor="sim-razon">Razón social<span className="text-destructive"> *</span></Label>
+              <Input id="sim-razon" value={sim.receptorRazon} onChange={setS("receptorRazon")} required aria-required />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-giro">Giro{simEsVenta && <span className="text-destructive"> *</span>}</Label>
+              <Input id="sim-giro" value={sim.receptorGiro} onChange={setS("receptorGiro")} required={simEsVenta} aria-required={simEsVenta} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-dir">Dirección{simEsVenta && <span className="text-destructive"> *</span>}</Label>
+              <Input id="sim-dir" value={sim.receptorDir} onChange={setS("receptorDir")} required={simEsVenta} aria-required={simEsVenta} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-cmna">Comuna{simEsVenta && <span className="text-destructive"> *</span>}</Label>
+              <Input id="sim-cmna" value={sim.receptorCmna} onChange={setS("receptorCmna")} required={simEsVenta} aria-required={simEsVenta} />
+            </div>
+          </Fieldset>
+          <Button size="lg" disabled={!simListo || loadingSim} onClick={generarSim}>
+            {loadingSim ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando simulación…</> : `Generar ${sim.traslados.length || ""} guía(s) de simulación`}
+          </Button>
+          {errorSim && (
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorSim}</AlertDescription>
+            </Alert>
+          )}
+          {resultSim && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-4 py-3">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                <div className="flex-1 text-sm"><strong>Simulación generada y válida según XSD.</strong> Descarga y guarda el ZIP.</div>
+                <Button size="sm" variant="outline" onClick={() => downloadB64(resultSim.zip_base64 ?? "", "guias_simulacion.zip")}>
+                  <Download className="mr-1 h-4 w-4" /> Descargar ZIP
+                </Button>
+              </div>
+              {resultSim.casos && (
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/60 text-left"><tr><th className="p-2">Folio</th><th className="p-2">Motivo</th><th className="p-2">IndTraslado</th><th className="p-2">TipoDespacho</th><th className="p-2">Cedible</th></tr></thead>
+                    <tbody>
+                      {resultSim.casos.map((c) => (
+                        <tr key={c.numero} className="border-t">
+                          <td className="p-2 font-mono">{c.folio}</td><td className="p-2">{c.motivo}</td><td className="p-2">{c.ind_traslado}</td>
+                          <td className="p-2">{c.tipo_despacho ?? "—"}</td><td className="p-2">{c.cedible ? "sí" : "no"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <PortalGuide
+                title="Subir la simulación al portal SII"
+                url="https://maullin.sii.cl/cgi_dte/UPL/DTEUpload"
+                steps={[
+                  { text: "Certificación DTE → Envío de Documentos → subir el EnvioDTE de simulación", highlight: true },
+                  { text: "Esperar EPR + AOK sin reparos y declarar el avance de la Simulación" },
+                  { text: "Las muestras impresas incluyen documentos de la simulación: usa los PDF de este mismo ZIP", highlight: true },
+                ]}
+              />
+              <Results data={resultSim} filename="guias_simulacion.zip" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">

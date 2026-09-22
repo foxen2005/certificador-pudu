@@ -337,6 +337,8 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 
 **Respuesta del SII (77334712-3, set 5089806, envío 259729604, 2026-09-22)**: SRH con un solo reparo, caso 1 (traslado interno): *"Los Indicadores (Despacho/Traslado) No Corresponden"*. Los casos de venta con `TipoDespacho` 1 y 2 pasaron. → Con `IndTraslado=5` **no se emite `TipoDespacho`** (corregido: solo se emite cuando el set trae "TRASLADO POR"). `SII_pudu_Server` nunca emite `TipoDespacho`, consistente con esto.
 
+**Simulación (Etapa 2) de guías** — `/adicionales/guias/simulacion`: mismos tipos de traslado que el set pero con productos y cliente reales (Manual de Certificación §6.2: "documentos … con datos representativos, paralelos de la operación real"). Usa el MISMO `build_guia_dte` con `referencia_set=False` (la referencia SET/CASO es exclusiva del set de pruebas), de modo que las reglas ya aceptadas por el SII se aplican igual: receptor = emisor y montos 0 en interno, `TipoDespacho` solo en venta, cedible solo en venta.
+
 ---
 
 ## 27. Exportación: SET BASICO DOCUMENTOS DE EXPORTACION (1) y (2) (v1.9.0, 2026-09-22)

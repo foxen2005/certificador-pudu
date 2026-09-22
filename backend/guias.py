@@ -69,12 +69,19 @@ class CasoGuia:
     motivo: str
     traslado_por: str = ""
     items: list[ItemSet] = field(default_factory=list)
+    ind_override: int | None = None   # simulación: el tipo lo elige el usuario
 
     @property
     def ind_traslado(self) -> int:
+        if self.ind_override is not None:
+            return self.ind_override
         m = self.motivo.upper()
         if "INTERNO" in m or "ENTRE BODEGAS" in m or "ENTRE SUCURSALES" in m:
             return 5
+        # "OTROS TRASLADOS NO VENTA" contiene "VENTA": descartar antes de la
+        # regla de venta, o se emitiría una guía de venta con IVA y cedible.
+        if "NO VENTA" in m or "NO CONSTITUYE VENTA" in m:
+            return 6
         if "DEVOLUCION" in m or "DEVOLUCIÓN" in m:
             return 7
         if "CONSIGNACION" in m or "CONSIGNACIÓN" in m:
@@ -181,7 +188,7 @@ def parse_set_guias(texto: str) -> SetGuias:
 # ─── XML de la guía ──────────────────────────────────────────────────────────
 
 def build_guia_dte(caso: CasoGuia, folio: int, emisor: dict, receptor: dict,
-                   caf: CAF, timestamp: str) -> etree._Element:
+                   caf: CAF, timestamp: str, referencia_set: bool = True) -> etree._Element:
     """`<DTE><Documento ID=…>` de una guía, con TED firmado. El receptor de un
     traslado interno es el propio emisor (instrucción del set)."""
     if caf.tipo_doc != 52:
@@ -246,12 +253,15 @@ def build_guia_dte(caso: CasoGuia, folio: int, emisor: dict, receptor: dict,
             etree.SubElement(DET, "PrcItem").text = str(int(it.precio_unitario))
         etree.SubElement(DET, "MontoItem").text = str(round(it.cantidad * it.precio_unitario))
 
-    REF = etree.SubElement(DOC, "Referencia")
-    etree.SubElement(REF, "NroLinRef").text = "1"
-    etree.SubElement(REF, "TpoDocRef").text = "SET"
-    etree.SubElement(REF, "FolioRef").text = caso.numero.split("-")[-1]
-    etree.SubElement(REF, "FchRef").text = fecha
-    etree.SubElement(REF, "RazonRef").text = f"CASO {caso.numero}"
+    # La referencia SET/CASO es exclusiva del set de pruebas; la simulación son
+    # documentos de la operación real y no la lleva.
+    if referencia_set:
+        REF = etree.SubElement(DOC, "Referencia")
+        etree.SubElement(REF, "NroLinRef").text = "1"
+        etree.SubElement(REF, "TpoDocRef").text = "SET"
+        etree.SubElement(REF, "FolioRef").text = caso.numero.split("-")[-1]
+        etree.SubElement(REF, "FchRef").text = fecha
+        etree.SubElement(REF, "RazonRef").text = f"CASO {caso.numero}"
 
     DOC.append(ted)
     etree.SubElement(DOC, "TmstFirma").text = timestamp
@@ -332,3 +342,62 @@ def parse_envio_guias(xml_bytes: bytes) -> list[GuiaParsed]:
             fch_resol=car.findtext("s:FchResol", default="", namespaces=ns),
         ))
     return out
+
+
+# ─── Simulación (Etapa 2: datos reales del contribuyente, sin set) ───────────
+#
+# El Manual de Certificación (§6.2) define la Simulación como un envío con
+# documentos "correspondientes a su facturación de los últimos 2 meses … con
+# datos representativos, paralelos de la operación real del contribuyente".
+# Para guías eso significa los mismos tipos de traslado que usará en producción,
+# pero con sus productos, precios y receptor reales — no los del set.
+#
+# Se construyen `CasoGuia` sintéticos para pasar por el MISMO builder que el
+# set (`build_guia_dte`), de modo que las reglas ya aceptadas por el SII
+# (receptor = emisor e importes 0 en traslado interno, TipoDespacho solo en
+# venta, cedible solo en venta) se apliquen igual.
+
+MOTIVO_SIMULACION = {
+    1: "VENTA",
+    2: "VENTAS POR EFECTUAR",
+    3: "CONSIGNACION",
+    4: "ENTREGA GRATUITA",
+    5: "TRASLADO INTERNO ENTRE BODEGAS DE LA EMPRESA",
+    6: "OTROS TRASLADOS NO VENTA",
+    7: "DEVOLUCION DE MERCADERIAS",
+}
+TRASLADO_POR_SIMULACION = {
+    1: "CLIENTE",
+    2: "EMISOR DEL DOCUMENTO AL LOCAL DEL CLIENTE",
+    3: "EMISOR DEL DOCUMENTO A OTRAS INSTALACIONES",
+}
+
+
+def casos_simulacion(traslados: list[int], items: list[ItemSet],
+                     tipo_despacho: int | None = None) -> list[CasoGuia]:
+    """Casos de simulación: un `CasoGuia` por tipo de traslado pedido.
+
+    `items` son los productos reales (nombre, cantidad, precio). El traslado
+    interno (5) va sin precios y con montos 0; los demás traslados que no son
+    venta (3, 4, 6, 7) sí informan montos, como cualquier guía valorizada.
+    `tipo_despacho` (1/2/3) aplica solo a los traslados de venta; el traslado
+    interno nunca lo lleva (reparo del SII, ver `CasoGuia.tipo_despacho`).
+
+    El tipo de traslado se fija con `ind_override`, no se deduce del texto: en
+    la simulación lo elige el usuario y no puede depender de un match de glosa.
+    """
+    if not traslados:
+        raise ValueError("Indica al menos un tipo de traslado para la simulación")
+    if not items:
+        raise ValueError("Indica al menos un producto para la simulación")
+    casos = []
+    for n, ind in enumerate(traslados, 1):
+        if ind not in MOTIVO_SIMULACION:
+            raise ValueError(f"Tipo de traslado {ind} no soportado en la simulación (1-7)")
+        caso = CasoGuia(numero=f"SIM-{n}", motivo=MOTIVO_SIMULACION[ind], ind_override=ind,
+                        items=[ItemSet(nombre=i.nombre, cantidad=i.cantidad,
+                                       precio_unitario=i.precio_unitario) for i in items])
+        if ind in (1, 2, 9) and tipo_despacho:
+            caso.traslado_por = TRASLADO_POR_SIMULACION.get(tipo_despacho, "")
+        casos.append(caso)
+    return casos
