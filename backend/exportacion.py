@@ -80,10 +80,17 @@ class ItemExp:
     descuento_pct: Decimal | None = None
     recargo_pct: Decimal | None = None   # ej. "10% recargo en la línea por comisiones"
 
+    def __post_init__(self):
+        # Servicio con "VALOR LINEA": se normaliza a cantidad 1 × precio = valor,
+        # sin unidad (IndServicio 3/4/5 no la exige). El SII compara PrcItem con el
+        # valor del set (reparo "Datos de la Linea 1 No Cuadran") y así las NC/ND,
+        # el XML y el PDF usan una sola representación.
+        if self.valor_linea is not None and self.cantidad is None:
+            self.cantidad, self.precio = Decimal(1), Decimal(self.valor_linea)
+            self.unidad, self.valor_linea = "", None
+
     @property
     def bruto(self) -> Decimal:
-        if self.valor_linea is not None:
-            return Decimal(self.valor_linea).quantize(D2)
         return (self.cantidad * self.precio).quantize(D2, ROUND_HALF_UP)
 
     # DescuentoMonto / RecargoMonto son MntImpType en el XSD (entero, sin decimales),
@@ -141,6 +148,7 @@ MARCAS_DEFECTO = "S/M"
 ID_CONTAINER_DEFECTO = _iso6346("MSCU123456")
 SELLO_DEFECTO = "123456-7"
 EMISOR_SELLO_DEFECTO = "LINEA NAVIERA"
+PASAPORTE_DEFECTO = "E12345"  # hotelería: N° de pasaporte del huésped (ref. 813)
 
 
 def es_contenedor(cod_tpo_bultos: str) -> bool:
@@ -312,7 +320,11 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
         # TotClauVenta: valor según cláusula (DUS). Si el set no lo da, el monto
         # exento del documento. XSD exige ≥ 0.01, por eso no se usa MntTotal
         # (que es 0 con forma de pago 21).
-        tot_clau = a.tot_clau_venta if a.tot_clau_venta is not None else doc.mnt_exe
+        # Con IndServicio 3/4/5 TotClauVenta no es obligatorio (Formato DTE): si el
+        # set no lo da, no se inventa (LibreDTE tampoco lo emite en ese caso).
+        tot_clau = a.tot_clau_venta
+        if tot_clau is None and str(doc.ind_servicio) not in ("3", "4", "5"):
+            tot_clau = doc.mnt_exe
         if tot_clau and tot_clau > 0:
             _sub(AD, "TotClauVenta", fmt_dec(tot_clau, 2))
     if a.cod_via_transp:
@@ -855,6 +867,11 @@ def revisar_set_exportacion(sets: list[SetExp]) -> list[dict]:
                     chequear("FORMA DE PAGO EXPORTACION", f["FORMA DE PAGO EXPORTACION"], cod_forma_pago)
                 for r in c.referencias_doc:
                     chequear("TIPO DE DOCUMENTO DE REFERENCIA", r, _ref_doc_code)
+                if c.recargo_global_pct and not f.get("TOTAL CLAUSULA DE VENTA"):
+                    campos.append({"campo": "COMISIONES EN EL EXTRANJERO", "valor": f"{c.recargo_global_pct}%",
+                                   "ok": False, "codigo": None,
+                                   "error": "Pide comisiones sobre el total de la cláusula, pero el set no trae "
+                                            "'TOTAL CLAUSULA DE VENTA'"})
             revisiones.append({
                 "set": s.nro_atencion, "caso": c.numero, "tipo": c.tipo,
                 "campos": campos,
@@ -931,15 +948,24 @@ def docs_desde_set(set_exp: SetExp, folios: dict, fecha: str, tipo_cambio: Decim
                 ad.cod_pais_recep = pais
                 ad.cod_pais_destin = pais
             recargos = []
+            # Orden de líneas DscRcgGlobal: primero la comisión (% del total de la
+            # cláusula), luego flete y seguro. El SII compara la línea 1 con la
+            # comisión (reparo "Linea 1 de Descuento/Recargo Global No Cuadran").
+            if c.recargo_global_pct and not ad.tot_clau_venta:
+                raise ValueError(f"Caso {c.numero}: pide comisiones del {c.recargo_global_pct}% del total de la "
+                                 "cláusula pero el set no trae 'TOTAL CLAUSULA DE VENTA'")
+            if c.recargo_global_pct:
+                recargos.append(RecargoGlobal("COMISIONES EN EL EXTRANJERO",
+                                              (ad.tot_clau_venta * c.recargo_global_pct / 100).quantize(D2, ROUND_HALF_UP)))
             # (**) flete y seguro: en el encabezado Y como dos líneas de recargo global
             if ad.mnt_flete:
                 recargos.append(RecargoGlobal("FLETE", ad.mnt_flete))
             if ad.mnt_seguro:
                 recargos.append(RecargoGlobal("SEGURO", ad.mnt_seguro))
-            if c.recargo_global_pct and ad.tot_clau_venta:
-                recargos.append(RecargoGlobal("COMISIONES EN EL EXTRANJERO",
-                                              (ad.tot_clau_venta * c.recargo_global_pct / 100).quantize(D2, ROUND_HALF_UP)))
             refs = [RefExp(_ref_doc_code(r), "1", fecha, "", r[:90]) for r in c.referencias_doc]
+            if c.es_hoteleria and not any(r.tipo_doc == "813" for r in refs):
+                # Hotelería: el SII exige 2 referencias (SET + pasaporte del huésped, 813).
+                refs.append(RefExp("813", PASAPORTE_DEFECTO, fecha, "", "PASAPORTE"))
             fma = str(cod_forma_pago(f["FORMA DE PAGO EXPORTACION"])) if f.get("FORMA DE PAGO EXPORTACION") else ""
             doc = DocExp(110, siguiente_folio(110), fecha, items, moneda, tipo_cambio, receptor, ad,
                          ind_servicio=ind_servicio, fma_pag_exp=fma, referencias=refs, recargos_globales=recargos)
@@ -948,9 +974,10 @@ def docs_desde_set(set_exp: SetExp, folios: dict, fecha: str, tipo_cambio: Decim
             if ref is None:
                 raise ValueError(f"Caso {c.numero} referencia al caso {c.referencia_caso}, que no está antes en el set")
             razon = c.razon_referencia.upper()
-            def copia(x: ItemExp, cantidad=None) -> ItemExp:
-                return ItemExp(x.nombre, cantidad if cantidad is not None else x.cantidad, x.precio, x.unidad,
-                               x.valor_linea, x.descuento_pct, x.recargo_pct)
+            def copia(x: ItemExp, cantidad=None, precio=None) -> ItemExp:
+                return ItemExp(x.nombre, cantidad if cantidad is not None else x.cantidad,
+                               precio if precio is not None else x.precio, x.unidad,
+                               None, x.descuento_pct, x.recargo_pct)
             recargos = []
             if c.tipo == 112:
                 cod_ref = "3" if "DEVOLUCION" in razon else ("2" if "CORRIGE" in razon else "1")
@@ -959,7 +986,11 @@ def docs_desde_set(set_exp: SetExp, folios: dict, fecha: str, tipo_cambio: Decim
                     items = []
                     for it in c.items:
                         base = next((x for x in ref.items if x.nombre.upper() == it.nombre.upper()), ref.items[0])
-                        items.append(copia(base, it.cantidad))
+                        if it.valor_linea is not None:
+                            # NC parcial de un servicio: el set da el nuevo valor de línea
+                            items.append(copia(base, Decimal(1), it.valor_linea))
+                        else:
+                            items.append(copia(base, it.cantidad))
                 else:
                     # NC que anula la factura completa: mismos ítems y recargos globales
                     items = [copia(x) for x in ref.items]

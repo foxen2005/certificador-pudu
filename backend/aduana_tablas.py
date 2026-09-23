@@ -53,9 +53,18 @@ UNIDADES_MEDIDA = {
 
 # Formas de pago de exportación Aduana (FmaPagExp). Formato DTE: 21 = sin pago
 # ("muestras sin carácter comercial"), y con 21 el MntTotal del DTE va en 0.
+# Fuente: tabla de LibreDTE (resources/data/repository/formas_pago_exportacion.php):
+# 1 cobranza hasta 1 año, 2 cobranza más de 1 año, 11 acreditivo hasta 1 año,
+# 12 acreditivo más de 1 año, 21 sin pago, 32 anticipo. OJO: ACRED es 11, no 2
+# (reparo real del SII, set 5092393: "Datos encabezado ... No Corresponde").
+# Solo siglas verificadas (COB1, ACRED, SIN PAGO, ANTICIPO) + las glosas oficiales
+# completas. "COBRANZA"/"ACREDITIVO" sueltos quedan AMBIGUOS a propósito (hasta
+# o más de 1 año): la búsqueda por prefijo avisa en vez de adivinar.
 FORMAS_PAGO_EXP = {
-    "COB1": 1, "COBRANZA": 1, "ACRED": 2, "ACREDITIVO": 2, "COB2": 11, "ACRED2": 12,
-    "SIN PAGO": 21, "ANTICIPO": 32,
+    "COB1": 1, "COBRANZA HASTA 1 ANO": 1, "COBRANZA MAS DE 1 ANO": 2,
+    "ACRED": 11, "ACREDITIVO HASTA 1 ANO": 11, "ACREDITIVO MAS DE 1 ANO": 12,
+    "SIN PAGO": 21, "S/PAGO": 21, "ANTICIPO": 32,
+    "PAGO ANTICIPADO A LA FECHA DE EMBARQUE": 32,
 }
 
 # Alias y acrónimos frecuentes en los sets del SII → nombre de la tabla de Aduana.
