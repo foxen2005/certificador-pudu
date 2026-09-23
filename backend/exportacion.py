@@ -120,6 +120,33 @@ class ReceptorExp:
     num_id: str = ""           # Tax ID extranjero, opcional
 
 
+def _iso6346(prefijo: str) -> str:
+    """Contenedor ISO 6346 (4 letras + 6 dígitos) con su dígito verificador tras guion."""
+    valores, v = {}, 10
+    for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        if v % 11 == 0:
+            v += 1
+        valores[ch] = v
+        v += 1
+    total = sum((valores[c] if c.isalpha() else int(c)) * 2 ** i for i, c in enumerate(prefijo))
+    return f"{prefijo}-{total % 11 % 10}"
+
+
+# Tipos de bulto "contenedor" de la tabla de Aduana (73/74 dry, 75/76 refrigerado,
+# 78 no especificado). El 77 (ESTANQUE) es explícitamente "no contenedor".
+CODIGOS_CONTENEDOR = {"73", "74", "75", "76", "78"}
+# El set no trae marcas ni datos del contenedor ("agregue otros datos que estime
+# necesarios"): se informan valores de ejemplo con formato válido.
+MARCAS_DEFECTO = "S/M"
+ID_CONTAINER_DEFECTO = _iso6346("MSCU123456")
+SELLO_DEFECTO = "123456-7"
+EMISOR_SELLO_DEFECTO = "LINEA NAVIERA"
+
+
+def es_contenedor(cod_tpo_bultos: str) -> bool:
+    return str(cod_tpo_bultos).lstrip("0") in CODIGOS_CONTENEDOR
+
+
 @dataclass
 class AduanaExp:
     cod_mod_venta: str = "1"
@@ -137,6 +164,10 @@ class AduanaExp:
     cod_unid_peso_neto: str = ""  # si difiere del bruto (el set puede pedir U bruto y KN neto)
     tot_bultos: int | None = None
     cod_tpo_bultos: str = ""
+    marcas: str = ""              # bulto distinto de contenedor
+    id_container: str = ""        # bulto contenedor (con guion y DV)
+    sello: str = ""
+    emisor_sello: str = ""
     mnt_flete: Decimal | None = None
     mnt_seguro: Decimal | None = None
     cod_pais_recep: str = ""
@@ -307,6 +338,14 @@ def build_exportacion_dte(doc: DocExp, emisor: dict, caf: CAF, timestamp: str) -
             TB = etree.SubElement(AD, "TipoBultos")
             _sub(TB, "CodTpoBultos", a.cod_tpo_bultos)
             _sub(TB, "CantBultos", a.tot_bultos)
+            # Formato DTE campos 98-101 (reparo HED-2-804 del SII si faltan):
+            # contenedor → IdContainer + Sello (+ EmisorSello); otro bulto → Marcas.
+            if es_contenedor(a.cod_tpo_bultos):
+                _sub(TB, "IdContainer", a.id_container or ID_CONTAINER_DEFECTO)
+                _sub(TB, "Sello", a.sello or SELLO_DEFECTO)
+                _sub(TB, "EmisorSello", a.emisor_sello or EMISOR_SELLO_DEFECTO)
+            else:
+                _sub(TB, "Marcas", a.marcas or MARCAS_DEFECTO)
     if a.mnt_flete is not None and a.mnt_flete > 0:
         _sub(AD, "MntFlete", fmt_dec(a.mnt_flete, 4))
     if a.mnt_seguro is not None and a.mnt_seguro > 0:

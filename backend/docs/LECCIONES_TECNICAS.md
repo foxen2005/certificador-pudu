@@ -377,3 +377,13 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 **La lógica vive en `backend/scripts/gen_aduana_tablas.py`** (plantilla): `aduana_tablas.py` es generado, así que editarlo a mano se pierde al regenerar. Para un alias nuevo, agregarlo en `_ALIAS_RAW` del generador y volver a correrlo.
 
 **Pre-chequeo** `POST /adicionales/exportacion/revisar-set` (`revisar_set_exportacion`): se ejecuta al subir el .txt en la web, sin certificado, sin CAF y sin consumir folios. Lista los textos que no resuelven y deshabilita "Generar". **Debe revisar exactamente lo mismo que `docs_desde_set`** (solo T110; nada de Aduana en hotelería; país con la cadena `PAIS RECEPTOR Y PAIS DESTINO` → `PAIS RECEPTOR` → `NACIONALIDAD`; NO las unidades de los ítems, que van como texto libre en `UnmdItem`). Si revisa de más, bloquea sets válidos; si revisa de menos, da luz verde a un set que después falla igual.
+
+## 29. HED-2-804 "Campo obligatorio: Marcas / Sello / Id. Container" (v1.12.1, 2026-09-23)
+
+**Reparo real**: SEIER SOLUTIONS 78488456-2, envíos 259999266 (T110 F1, TRONCOS → falta `Marcas`) y 259999424 (T110 F3, CONTENEDOR REFRIGERADO → faltan `Sello` e `Id. Container`). El XSD los declara `minOccurs=0`, pero el SII los exige según el tipo de bulto (Formato DTE, campos 98-101):
+- Bulto **contenedor** (códigos 73, 74, 75, 76, 78): `IdContainer` (con guion y DV) + `Sello` + `EmisorSello`.
+- **Cualquier otro** bulto (el 77 ESTANQUE incluido): `Marcas`.
+
+El set no trae esos datos ("agregue otros datos que estime necesarios"). Se informan valores de ejemplo con formato válido: `Marcas` = `S/M`, `IdContainer` = `MSCU123456-6` (DV ISO 6346 calculado), `Sello` = `123456-7`, `EmisorSello` = `LINEA NAVIERA`. `AduanaExp` acepta valores reales en `marcas`/`id_container`/`sello`/`emisor_sello`.
+
+Orden XSD dentro de `TipoBultos`: CodTpoBultos, CantBultos, Marcas, IdContainer, Sello, EmisorSello.
