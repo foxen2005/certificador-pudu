@@ -360,3 +360,20 @@ Lo que NO confirma: los reparos del revisor humano en Muestras Impresas (el Manu
 **Implementación**: `exportacion.py` (`parse_set_exportacion`, `docs_desde_set`, modelo con `valor_linea`, descuentos/recargos de línea y `RecargoGlobal`), `routers/exportacion_api.py` `/adicionales/exportacion/set` (un EnvioDTE por set, folios correlativos por tipo entre sets, ZIP con carpeta por set), UI "A · Set de pruebas del SII" en `/adicionales`.
 
 **Pendiente hasta la respuesta del SII**: `IndServicio 3/4`, `TipoDespacho`-like interpretaciones y los folios inventados de DUS/AWB/MIC/SNA son lectura del Formato; si el SII repara, ajustar y anotar aquí.
+
+## 28. Tablas de Aduana tolerantes a acrónimos + pre-chequeo del set (v1.12.0, 2026-09-23)
+
+**Caso real**: set 5092392 (RUT 78488456-2) traía `PAIS RECEPTOR Y PAIS DESTINO: U.S.A.` y la generación caía con "País 'U.S.A.' no está en la tabla de Aduana". La tabla oficial solo tiene `ESTADOS UNIDOS DE AMERICA` (225), y además arrastra sufijos propios como `REPUBLICA CHECA (D)`, `RUSIA (B)`, `TAIWAN (FORMOSA)` o `MYANMAR (EX BIRMANIA)`.
+
+**Búsqueda (`_buscar` en `aduana_tablas.py`)**, en este orden:
+1. Nombre exacto de la tabla (`norm`: mayúsculas sin acentos).
+2. Alias/acrónimo (`_ALIAS_RAW`): USA, U.S.A., EE.UU., EEUU, UK, R. UNIDO, GRAN BRETAÑA, INGLATERRA, P. BAJOS, HOLANDA, R.P. CHINA, R. CHECA, RUSIA, TAIWAN, BIRMANIA, EAU; puertos S. ANTONIO, VALPO, PTO MONTT, PTA ARENAS, NUEVA YORK, SHANGHAI.
+3. Coincidencia tolerante (`clave`): sin puntos, guiones ni el texto entre paréntesis.
+4. Sigla con puntos compactada (`C.I.F.` → `CIF`).
+5. Prefijo por **palabras completas** (`CONTENEDOR REFRIGERADO` → `... 20 PIES`).
+
+**Ambigüedad explícita**: si el texto calza con más de un código, falla con "es ambiguo: puede ser COREA DEL NORTE o COREA DEL SUR". Nunca se adivina (`COREA`, `CAJAS`).
+
+**La lógica vive en `backend/scripts/gen_aduana_tablas.py`** (plantilla): `aduana_tablas.py` es generado, así que editarlo a mano se pierde al regenerar. Para un alias nuevo, agregarlo en `_ALIAS_RAW` del generador y volver a correrlo.
+
+**Pre-chequeo** `POST /adicionales/exportacion/revisar-set` (`revisar_set_exportacion`): se ejecuta al subir el .txt en la web, sin certificado, sin CAF y sin consumir folios. Lista los textos que no resuelven y deshabilita "Generar". **Debe revisar exactamente lo mismo que `docs_desde_set`** (solo T110; nada de Aduana en hotelería; país con la cadena `PAIS RECEPTOR Y PAIS DESTINO` → `PAIS RECEPTOR` → `NACIONALIDAD`; NO las unidades de los ítems, que van como texto libre en `UnmdItem`). Si revisa de más, bloquea sets válidos; si revisa de menos, da luz verde a un set que después falla igual.

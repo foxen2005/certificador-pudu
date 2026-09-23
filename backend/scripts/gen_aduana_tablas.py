@@ -48,11 +48,26 @@ medida y formas de pago vienen de la tabla de Aduana usada en el DUS (misma que
 LibreDTE); KN=6 coincide con SII_pudu_Server (UNIDAD_MEDIDA_ADUANA_KG='06').
 Claves normalizadas: mayúsculas sin acentos.
 """
+import re
 import unicodedata
 
 
 def norm(s: str) -> str:
     return unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().upper().strip()
+
+
+_PAREN = re.compile(r"\\([^)]*\\)")
+_SEPARADORES = re.compile(r"[.\\-_/,;]+")
+_ESPACIOS = re.compile(r"\\s+")
+
+
+def clave(s: str) -> str:
+    """Normalización tolerante para comparar: sin acentos, sin puntos ni guiones
+    ("U.S.A." → "U S A") y sin sufijos entre paréntesis que solo existen en la
+    tabla de Aduana ("REPUBLICA CHECA (D)" → "REPUBLICA CHECA")."""
+    k = _PAREN.sub(" ", norm(s))
+    k = _SEPARADORES.sub(" ", k)
+    return _ESPACIOS.sub(" ", k).strip()
 
 
 PAISES = %s
@@ -82,24 +97,94 @@ FORMAS_PAGO_EXP = {
     "SIN PAGO": 21, "ANTICIPO": 32,
 }
 
-# Alias frecuentes en los sets del SII → clave de la tabla
-_ALIAS = {
+# Alias y acrónimos frecuentes en los sets del SII → nombre de la tabla de Aduana.
+# Las claves se comparan con clave() (sin puntos ni acentos), así que "EE.UU.",
+# "EE UU" y "EEUU" caen todos en la misma entrada.
+_ALIAS_RAW = {
+    # Vía de transporte / modalidad / bultos
     "AEREO": "AEREO", "MARITIMA, FLUVIAL Y LACUSTRE": "MARITIMA, FLUVIAL Y LACUSTRE",
     "CARRETERO": "CARRETERO / TERRESTRE", "TERRESTRE": "CARRETERO / TERRESTRE",
     "A FIRME": "A FIRME", "FIRME": "A FIRME",
     "EN CONSIGNACION CON UN MINIMO A FIRME": "EN CONSIGNACION CON UN MINIMO A FIRME",
     "CONTENEDOR REFRIGERADO": "CONTENEDOR REFRIGERADO 20 PIES",
+    # Países: acrónimos y nombres cortos de uso corriente
+    "USA": "ESTADOS UNIDOS DE AMERICA", "U.S.A.": "ESTADOS UNIDOS DE AMERICA",
+    "US": "ESTADOS UNIDOS DE AMERICA", "EEUU": "ESTADOS UNIDOS DE AMERICA",
+    "EE.UU.": "ESTADOS UNIDOS DE AMERICA", "EUA": "ESTADOS UNIDOS DE AMERICA",
+    "ESTADOS UNIDOS": "ESTADOS UNIDOS DE AMERICA",
+    "UNITED STATES": "ESTADOS UNIDOS DE AMERICA",
+    "UK": "REINO UNIDO", "U.K.": "REINO UNIDO", "R. UNIDO": "REINO UNIDO",
+    "GRAN BRETANA": "REINO UNIDO", "INGLATERRA": "REINO UNIDO",
+    "REINO UNIDO DE GRAN BRETANA E IRLANDA DEL NORTE": "REINO UNIDO",
+    "P. BAJOS": "PAISES BAJOS", "HOLANDA": "PAISES BAJOS", "NETHERLANDS": "PAISES BAJOS",
+    "R.P. CHINA": "CHINA", "RP CHINA": "CHINA", "REPUBLICA POPULAR CHINA": "CHINA",
+    "CHINA POPULAR": "CHINA", "R. CHECA": "REPUBLICA CHECA (D)",
+    "REPUBLICA CHECA": "REPUBLICA CHECA (D)", "CHEQUIA": "REPUBLICA CHECA (D)",
+    "RUSIA": "RUSIA (B)", "FEDERACION RUSA": "RUSIA (B)",
+    "TAIWAN": "TAIWAN (FORMOSA)", "FORMOSA": "TAIWAN (FORMOSA)",
+    "BIRMANIA": "MYANMAR (EX BIRMANIA)", "MYANMAR": "MYANMAR (EX BIRMANIA)",
+    "EAU": "EMIRATOS ARABES UNIDOS", "E.A.U.": "EMIRATOS ARABES UNIDOS",
+    "EMIRATOS ARABES": "EMIRATOS ARABES UNIDOS",
+    "ALEMANIA FEDERAL": "ALEMANIA", "R.F. ALEMANA": "ALEMANIA",
+    "COREA DEL SUR": "COREA DEL SUR", "COREA DEL NORTE": "COREA DEL NORTE",
+    # Puertos escritos abreviados
+    "S. ANTONIO": "SAN ANTONIO", "SN ANTONIO": "SAN ANTONIO", "VALPO": "VALPARAISO",
+    "PTO MONTT": "PUERTO MONTT", "PTA ARENAS": "PUNTA ARENAS",
+    "NUEVA YORK": "NEW YORK", "SHANGHAI": "SHANGAI",
 }
+_ALIAS = {clave(k): v for k, v in _ALIAS_RAW.items()}
+
+# Índice tolerante por tabla: clave() → [(nombre oficial, código), ...]
+_INDICES: dict = {}
+
+
+def _indice(tabla: dict) -> dict:
+    idx = _INDICES.get(id(tabla))
+    if idx is None:
+        idx = {}
+        for nombre, cod in tabla.items():
+            idx.setdefault(clave(nombre), []).append((nombre, cod))
+        _INDICES[id(tabla)] = idx
+    return idx
+
+
+def _unico(cands: list, texto: str, que: str) -> int:
+    if len({c for _, c in cands}) == 1:
+        return cands[0][1]
+    nombres = sorted({n for n, _ in cands})
+    muestra = " o ".join(nombres[:4]) + (", ..." if len(nombres) > 4 else "")
+    raise KeyError(f"{que} '{texto}' es ambiguo: puede ser {muestra}. Escribe el nombre exacto de la tabla de Aduana")
 
 
 def _buscar(tabla: dict, texto: str, que: str) -> int:
-    k = norm(_ALIAS.get(norm(texto), texto))
-    if k in tabla:
-        return tabla[k]
-    # coincidencia por prefijo (ej. "CONTENEDOR REFRIGERADO" → "... 20 PIES")
-    cands = [v for kk, v in tabla.items() if kk.startswith(k) or k.startswith(kk)]
-    if len(cands) == 1:
-        return cands[0]
+    # 1. nombre exacto de la tabla
+    if norm(texto) in tabla:
+        return tabla[norm(texto)]
+    # 2. acrónimo o alias conocido
+    t = texto
+    alias = _ALIAS.get(clave(texto))
+    if alias:
+        if norm(alias) in tabla:
+            return tabla[norm(alias)]
+        t = alias
+    k = clave(t)
+    if not k:
+        raise KeyError(f"Falta {que}")
+    idx = _indice(tabla)
+    # 3. coincidencia tolerante (sin puntos, sin "(D)"/"(B)" de la tabla)
+    if k in idx:
+        return _unico(idx[k], texto, que)
+    # 4. sigla escrita con puntos ("C.I.F." → "CIF")
+    compacto = k.replace(" ", "")
+    if compacto in tabla:
+        return tabla[compacto]
+    if compacto in idx:
+        return _unico(idx[compacto], texto, que)
+    # 5. prefijo por palabras completas ("CONTENEDOR REFRIGERADO" → "... 20 PIES")
+    cands = [x for kk, v in idx.items()
+             if kk.startswith(k + " ") or k.startswith(kk + " ") for x in v]
+    if cands:
+        return _unico(cands, texto, que)
     raise KeyError(f"{que} '{texto}' no está en la tabla de Aduana")
 
 

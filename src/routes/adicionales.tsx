@@ -244,6 +244,13 @@ interface ExpSetResult extends BatchResult {
   }[];
 }
 
+interface RevisionSet {
+  sets: { nro_atencion: string; nombre: string; casos: number }[];
+  casos: { set: string; caso: string; tipo: number; errores: unknown[] }[];
+  errores: { set: string; caso: string; campo: string; valor: string; error: string }[];
+  listo: boolean;
+}
+
 function Fieldset({ legend, hint, children }: { legend: string; hint?: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3 rounded-lg border p-4">
@@ -284,6 +291,25 @@ function Exportacion({ shared }: { shared: Shared }) {
   const [setF, setSetF] = useState<File | null>(null);
   const [resultSet, setResultSet] = useState<ExpSetResult | null>(null);
   const [loadingS, setLoadingS] = useState(false);
+  const [revision, setRevision] = useState<RevisionSet | null>(null);
+  const [revisando, setRevisando] = useState(false);
+
+  // Pre-chequeo: al subir el set traduce sus textos de Aduana a código sin firmar
+  // ni consumir folios, para avisar de países/puertos/unidades desconocidos antes.
+  useEffect(() => {
+    setRevision(null);
+    setRevisando(false);
+    if (!setF) return;
+    let vigente = true;
+    setRevisando(true);
+    const fd = new FormData();
+    fd.append("set_pruebas", setF);
+    postForm("/api/sii/adicionales/exportacion/revisar-set", fd, shared.clave)
+      .then((r) => vigente && setRevision(r as RevisionSet))
+      .catch((e) => vigente && setError((e as Error).message))
+      .finally(() => vigente && setRevisando(false));
+    return () => { vigente = false; };
+  }, [setF, shared.clave]);
 
   const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -436,7 +462,29 @@ function Exportacion({ shared }: { shared: Shared }) {
               <Input id="exp-set-rec" placeholder="IMPORTADOR DE PRUEBA" value={form.receptorRazon} onChange={set("receptorRazon")} />
             </div>
           </div>
-          <Button size="lg" disabled={!setF || !cafsOk || !foliosOk || form.tipoCambio.trim() === "" || loadingS} onClick={generarSet}>
+          {revisando && (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Revisando los textos de Aduana del set…</p>
+          )}
+          {revision?.listo && (
+            <div className="flex items-center gap-2 rounded-lg border border-success/40 bg-success/5 px-3 py-2 text-xs">
+              <CheckCircle2 className="h-4 w-4 text-success" />
+              <span>Todos los textos de Aduana del set ({revision.casos.length} casos) se tradujeron a código. Puedes generar.</span>
+            </div>
+          )}
+          {revision && !revision.listo && (
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <strong>El set trae textos que no están en las tablas de Aduana.</strong> Corrige el texto en el .txt (o avísanos para agregar el alias) antes de generar:
+                <ul className="mt-2 list-disc space-y-1 pl-4">
+                  {revision.errores.map((e, i) => (
+                    <li key={i}><span className="font-mono">{e.caso}</span> · {e.campo}: {e.error}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+          <Button size="lg" disabled={!setF || !cafsOk || !foliosOk || form.tipoCambio.trim() === "" || loadingS || revisando || revision?.listo === false} onClick={generarSet}>
             {loadingS ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando sets y validando contra XSD…</> : "Generar documentos del set"}
           </Button>
           {!cafsOk && <p className="text-xs text-muted-foreground">Sube los tres CAF (110, 112, 111) arriba para habilitar el set.</p>}

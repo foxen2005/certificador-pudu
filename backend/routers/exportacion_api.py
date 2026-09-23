@@ -28,7 +28,7 @@ from builders.envio_dte import CAF
 from exportacion import (
     MONEDAS, TIPO_NOMBRE_EXP, AduanaExp, ReceptorExp,
     build_envio_exportacion, build_exportacion_dte, docs_desde_set, docs_simulacion,
-    parse_envio_exportacion, parse_set_exportacion,
+    parse_envio_exportacion, parse_set_exportacion, revisar_set_exportacion,
 )
 from generator_exportacion import generate_pdf_exportacion
 from timestamped_output import get_timestamped_output_dir
@@ -260,6 +260,28 @@ async def exportacion_set(
         "documentos": sum(len(x["casos"]) for x in resumen), "pdfs_generados": len(resultados),
         "aprobados": aprobados, "rechazados": len(resultados) - aprobados,
         "resultados": resultados, "zip_base64": base64.b64encode(zip_buf.getvalue()).decode(),
+    })
+
+
+@router.post("/exportacion/revisar-set")
+async def exportacion_revisar_set(
+    set_pruebas: UploadFile = File(..., description="SIISetDePruebas*.txt de exportación"),
+):
+    """Revisa el set ANTES de firmar: traduce cada texto de Aduana (país, puerto,
+    vía, cláusula, modalidad, bultos, unidades, forma de pago, moneda y documentos
+    de referencia) a su código y devuelve los que no se pudieron resolver.
+    No pide certificado ni CAF, y no consume folios."""
+    try:
+        sets = parse_set_exportacion((await set_pruebas.read()).decode("iso-8859-1"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    revisiones = revisar_set_exportacion(sets)
+    errores = [{"set": r["set"], "caso": r["caso"], **e} for r in revisiones for e in r["errores"]]
+    return JSONResponse({
+        "sets": [{"nro_atencion": s.nro_atencion, "nombre": s.nombre, "casos": len(s.casos)} for s in sets],
+        "casos": revisiones,
+        "errores": errores,
+        "listo": not errores,
     })
 
 

@@ -762,6 +762,68 @@ def _ref_doc_code(texto: str) -> str:
     raise ValueError(f"Referencia documental '{texto}' no reconocida (DUS, AWB, B/L, MIC, CARTA DE PORTE, RESOLUCION SNA, PASAPORTE)")
 
 
+#: Campos Aduana que docs_desde_set traduce a código (solo T110 que no es hotelería).
+#: Debe calzar EXACTO con docs_desde_set: si revisa de más bloquea sets válidos,
+#: si revisa de menos da luz verde y la generación falla igual.
+CAMPOS_ADUANA = [
+    ("MODALIDAD DE VENTA", cod_modalidad),
+    ("CLAUSULA DE VENTA DE EXPORTACION", cod_clausula),
+    ("VIA DE TRANSPORTE", cod_via),
+    ("PUERTO DE EMBARQUE", cod_puerto),
+    ("PUERTO DE DESEMBARQUE", cod_puerto),
+    ("UNIDAD DE MEDIDA DE TARA", cod_unidad),
+    ("UNIDAD PESO BRUTO", cod_unidad),
+    ("UNIDAD PESO NETO", cod_unidad),
+    ("TIPO DE BULTO", cod_bulto),
+]
+
+
+def revisar_set_exportacion(sets: list[SetExp]) -> list[dict]:
+    """Traduce a código los textos de Aduana del set SIN generar ni firmar nada.
+
+    Revisa exactamente lo que resuelve docs_desde_set (T110; las NC/ND copian
+    los datos del documento que referencian), para avisar en la web qué textos
+    no están en las tablas de Aduana (o son ambiguos) antes de gastar folios.
+    La unidad de los ítems NO se revisa: va como texto libre en UnmdItem.
+    """
+    revisiones = []
+    for s in sets:
+        for c in s.casos:
+            campos = []
+
+            def chequear(etiqueta: str, valor: str, fn):
+                try:
+                    campos.append({"campo": etiqueta, "valor": valor, "ok": True, "codigo": fn(valor), "error": None})
+                except (KeyError, ValueError) as e:
+                    campos.append({"campo": etiqueta, "valor": valor, "ok": False, "codigo": None,
+                                   "error": str(e).strip('"')})
+
+            f = c.campos
+            if c.tipo == 110:
+                moneda = f.get("MONEDA DE LA OPERACION", "")
+                ok = moneda in MONEDAS
+                campos.append({"campo": "MONEDA DE LA OPERACION", "valor": moneda, "ok": ok, "codigo": None,
+                               "error": None if ok else f"Moneda '{moneda}' no está en la tabla del SII"})
+                pais_campo = next((k for k in ("PAIS RECEPTOR Y PAIS DESTINO", "PAIS RECEPTOR", "NACIONALIDAD")
+                                   if f.get(k)), None)
+                if pais_campo:
+                    chequear(pais_campo, f[pais_campo], cod_pais)
+                if not c.es_hoteleria:
+                    for clave_campo, fn in CAMPOS_ADUANA:
+                        if f.get(clave_campo):
+                            chequear(clave_campo, f[clave_campo], fn)
+                if f.get("FORMA DE PAGO EXPORTACION"):
+                    chequear("FORMA DE PAGO EXPORTACION", f["FORMA DE PAGO EXPORTACION"], cod_forma_pago)
+                for r in c.referencias_doc:
+                    chequear("TIPO DE DOCUMENTO DE REFERENCIA", r, _ref_doc_code)
+            revisiones.append({
+                "set": s.nro_atencion, "caso": c.numero, "tipo": c.tipo,
+                "campos": campos,
+                "errores": [x for x in campos if not x["ok"]],
+            })
+    return revisiones
+
+
 def docs_desde_set(set_exp: SetExp, folios: dict, fecha: str, tipo_cambio: Decimal,
                    receptor_nombre: str = "IMPORTADOR DE PRUEBA",
                    tara: int = 50, peso_bruto: Decimal = Decimal("1000"), peso_neto: Decimal = Decimal("950")) -> list[DocExp]:
