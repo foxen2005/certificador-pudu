@@ -129,9 +129,18 @@ app.add_middleware(
 # router reutiliza _parse_datos/OUTPUT_BASE_DIR definidos más abajo.
 from routers.exportacion_api import router as _exportacion_router  # noqa: E402
 from routers.guias_api import router as _guias_router  # noqa: E402
+from routers.compra_api import router as _compra_router  # noqa: E402
 app.include_router(_exportacion_router)
 app.include_router(_guias_router)
+app.include_router(_compra_router)
 
+
+# Producto/precio por defecto de las simulaciones (Etapa 2 básica y de Factura
+# de Compra en /adicionales/compra/simulacion). Una sola fuente para ambos.
+SIM_PRODUCTO_DEFECTO = "Servicio tecnológico"
+SIM_PRECIO_DEFECTO = 35000
+SIM_CANTIDAD_DEFECTO = 2   # unidades de la factura; la NC devuelve 1 y la ND la anula
+TASA_IVA = 19              # la misma que escribe builders/envio_dte.py en <TasaIVA>
 
 RECEPTOR_PRUEBA = {
     "rut": "77221286-0",
@@ -166,6 +175,57 @@ async def certificar(
     """
     Flujo completo: recibe SIISetDePruebas + CAFs + certificado PFX,
     genera XMLs firmados, PDFs e informe de validación.
+
+    Solo el SET BÁSICO: si el archivo trae además el set de Factura de Compra
+    (T46 y sus NC/ND), esos casos se excluyen y se generan aparte en
+    Certificaciones adicionales (POST /adicionales/compra/set). `caf_46` y
+    `folio_inicial_46` se siguen aceptando por compatibilidad con el frontend
+    anterior, pero ya no se usan aquí.
+    """
+    return await _certificar_core(
+        set_pruebas, datos, pfx,
+        {33: caf_33, 56: caf_56, 61: caf_61, 52: caf_52},
+        {33: folio_inicial_33, 56: folio_inicial_56, 61: folio_inicial_61, 52: folio_inicial_52},
+        solo="basico",
+        # Un frontend anterior aún manda caf_46 creyendo que el T46 va en este
+        # envío: si el archivo trae ese set, avisar en vez de omitirlo en silencio.
+        frontend_con_t46=caf_46 is not None,
+    )
+
+
+def _es_seccion_compra(caso: CasoSet) -> bool:
+    return bool(caso.seccion) and "FACTURA DE COMPRA" in caso.seccion
+
+
+def _marcar_retencion(casos: list[CasoSet]) -> None:
+    """Retención total del IVA (cambio de sujeto): la lleva la Factura de Compra
+    (T46), todo caso del encabezado "SET FACTURA DE COMPRA" y, por herencia, toda
+    NC/ND que referencie (transitivamente) un T46. Esa marca define qué casos son
+    del set de Factura de Compra: la sección manda; la cadena de referencias es
+    el respaldo para archivos sin encabezados."""
+    caso_by_num = {c.numero: c for c in casos}
+
+    def _tiene_retencion(caso: CasoSet, _visto: set | None = None) -> bool:
+        if caso.tipo_doc == 46 or _es_seccion_compra(caso):
+            return True
+        _visto = _visto or set()
+        if not caso.referencia_caso or caso.referencia_caso in _visto:
+            return False
+        _visto.add(caso.referencia_caso)
+        ref = caso_by_num.get(caso.referencia_caso)
+        return _tiene_retencion(ref, _visto) if ref else False
+
+    for caso in casos:
+        caso.con_retencion = _tiene_retencion(caso)
+
+
+async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_overrides: dict,
+                           solo: str = "basico", frontend_con_t46: bool = False):
+    """Genera el EnvioDTE de un set a partir del SIISetDePruebas.
+
+    solo="basico": set básico (T33/T56/T61/T52…) + Libro de Ventas/Compras,
+                   SIN los casos de Factura de Compra.
+    solo="compra": solo la cadena de Factura de Compra (T46 → NC → ND), sin libros.
     """
     # Leer archivos
     try:
@@ -180,7 +240,7 @@ async def certificar(
 
     # Cargar CAFs disponibles
     cafs: dict[int, CAF] = {}
-    for tipo, upload in [(33, caf_33), (56, caf_56), (61, caf_61), (52, caf_52), (46, caf_46)]:
+    for tipo, upload in caf_uploads.items():
         if upload is not None:
             raw = await upload.read()
             if raw:
@@ -206,6 +266,29 @@ async def certificar(
     except Exception as e:
         raise HTTPException(422, f"Error al parsear SIISetDePruebas: {e}")
 
+    # Separar el set de Factura de Compra (T46 + NC/ND que la referencian) del
+    # set básico: se certifican en envíos distintos y desde módulos distintos.
+    _marcar_retencion(sp.casos)
+    casos_compra = [c for c in sp.casos if c.con_retencion]
+    casos_basico = [c for c in sp.casos if not c.con_retencion]
+    if solo == "compra":
+        sp.casos = casos_compra
+        if not sp.casos:
+            raise HTTPException(422, "El archivo no trae casos de Factura de Compra "
+                                     "(DOCUMENTO FACTURA DE COMPRA ELECTRONICA y sus NC/ND).")
+    else:
+        if casos_compra and frontend_con_t46:
+            raise HTTPException(422, "La Factura de Compra (T46) ahora se certifica aparte: recarga la página "
+                                     "y genera ese set en Certificaciones adicionales → Factura de Compra. "
+                                     "El set básico se genera sin el CAF T46.")
+        sp.casos = casos_basico
+        if not sp.casos:
+            raise HTTPException(422, "El archivo solo trae el set de Factura de Compra: genéralo en "
+                                     "Certificaciones adicionales → Factura de Compra."
+                                if casos_compra else
+                                "El archivo no trae casos de prueba (CASO n-n con DOCUMENTO). "
+                                "¿Es el SIISetDePruebas*.txt correcto?")
+
     # Verificar que tenemos CAF para cada tipo de documento requerido
     tipos_requeridos = {c.tipo_doc for c in sp.casos}
     faltantes = tipos_requeridos - set(cafs.keys())
@@ -215,21 +298,6 @@ async def certificar(
     # Resolver items para NC/ND: copiar del caso referenciado o resolver precios
     import copy as _copy
     caso_by_num = {c.numero: c for c in sp.casos}
-
-    # Retención total del IVA (cambio de sujeto): la lleva la Factura de Compra
-    # (T46) y, por herencia, toda NC/ND que referencie (transitivamente) un T46.
-    def _tiene_retencion(caso: CasoSet, _visto: set | None = None) -> bool:
-        if caso.tipo_doc == 46:
-            return True
-        _visto = _visto or set()
-        if not caso.referencia_caso or caso.referencia_caso in _visto:
-            return False
-        _visto.add(caso.referencia_caso)
-        ref = caso_by_num.get(caso.referencia_caso)
-        return _tiene_retencion(ref, _visto) if ref else False
-
-    for caso in sp.casos:
-        caso.con_retencion = _tiene_retencion(caso)
 
     for caso in sp.casos:
         if not caso.referencia_caso:
@@ -278,10 +346,7 @@ async def certificar(
     # folios consumidos de PUDU quedan documentados en
     # docs/RESUMEN_CERTIFICACION_78392059K.md, no en código.
     FOLIO_START: dict[int, int] = {}
-    _folio_overrides = {33: folio_inicial_33, 56: folio_inicial_56,
-                        61: folio_inicial_61, 52: folio_inicial_52,
-                        46: folio_inicial_46}
-    for _t, _v in _folio_overrides.items():
+    for _t, _v in folio_overrides.items():
         if _v is not None:
             FOLIO_START[_t] = _v
     # Validar que el folio inicial esté dentro del rango autorizado del CAF
@@ -332,7 +397,9 @@ async def certificar(
     libro_ventas_ok = False
     libro_compras_ok = False
 
-    out_dir = get_timestamped_output_dir(OUTPUT_BASE_DIR)
+    out_dir = (get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="compra_set") if solo == "compra"
+               else get_timestamped_output_dir(OUTPUT_BASE_DIR))
+    envio_name = f"EnvioDTE_COMPRA_{rut_clean}.xml" if solo == "compra" else f"EnvioDTE_{rut_clean}.xml"
 
     def _save(filename: str, data) -> None:
         path = os.path.join(out_dir, filename)
@@ -343,8 +410,8 @@ async def certificar(
 
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # EnvioDTE XML
-        zf.writestr(f"EnvioDTE_{rut_clean}.xml", envio_xml)
-        _save(f"EnvioDTE_{rut_clean}.xml", envio_xml)
+        zf.writestr(envio_name, envio_xml)
+        _save(envio_name, envio_xml)
 
         # PDFs por cada DTE
         for dte in dtes_parsed:
@@ -370,8 +437,9 @@ async def certificar(
                     },
                 })
 
+        # Libros: solo en el set básico (el de Factura de Compra no los lleva)
         # Libro de Ventas
-        if sp.nro_atencion_ventas:
+        if solo == "basico" and sp.nro_atencion_ventas:
             try:
                 lv_xml = build_libro_ventas(
                     sp.casos, folios_ref, RECEPTOR_PRUEBA, emisor_data,
@@ -384,7 +452,7 @@ async def certificar(
                 raise HTTPException(500, f"Error generando Libro de Ventas: {e}")
 
         # Libro de Compras
-        if sp.nro_atencion_compras and sp.libro_compras:
+        if solo == "basico" and sp.nro_atencion_compras and sp.libro_compras:
             try:
                 lc_xml = build_libro_compras(
                     sp.libro_compras, emisor_data,
@@ -400,7 +468,22 @@ async def certificar(
     zip_b64 = __import__("base64").b64encode(zip_buf.getvalue()).decode()
 
     aprobados = sum(1 for r in resultados if r["validacion"]["aprobado"])
+    if solo == "compra":
+        return JSONResponse({
+            "nro_atencion": sp.nro_atencion_factura_compra,
+            "casos": [{"numero": c.numero, "tipo": c.tipo_doc, "folio": folios_ref.get(c.numero)} for c in sp.casos],
+            "archivo": envio_name,
+            "documentos": len(dtes_xml),
+            "pdfs_generados": len(resultados),
+            "aprobados": aprobados,
+            "rechazados": len(resultados) - aprobados,
+            "resultados": resultados,
+            "zip_base64": zip_b64,
+        })
     return JSONResponse({
+        # Casos de Factura de Compra que venían en el archivo y NO se generaron
+        # aquí: van en Certificaciones adicionales → Factura de Compra.
+        "casos_compra_excluidos": [c.numero for c in casos_compra],
         "nro_atencion": sp.nro_atencion_basico,
         "nro_atencion_ventas": sp.nro_atencion_ventas,
         "nro_atencion_compras": sp.nro_atencion_compras,
@@ -546,8 +629,8 @@ async def etapa2_simulacion(
     folio_61: int = Form(None, description="Folio T61 (opcional)"),
     folio_56: int = Form(None, description="Folio T56 (opcional)"),
     folio_46: int = Form(None, description="Folio T46 (opcional)"),
-    producto: str = Form("Servicio tecnológico", description="Nombre del producto/servicio"),
-    precio:   int = Form(35000, description="Precio unitario (sin IVA)"),
+    producto: str = Form(SIM_PRODUCTO_DEFECTO, description="Nombre del producto/servicio"),
+    precio:   int = Form(SIM_PRECIO_DEFECTO, description="Precio unitario (sin IVA)"),
     modo:     str = Form("basico", description="Tipo de simulación: 'basico' (T33/T61/T56) o 'compra' (T46)"),
 ):
     """
@@ -607,7 +690,7 @@ async def etapa2_simulacion(
         f56 = _folio_en_rango(caf56, folio_56 or caf56.desde, "T56")
 
         caso_t46 = CasoSet(numero="SIM-1", tipo_doc=46,
-                           items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+                           items=[ItemSet(nombre=producto, cantidad=SIM_CANTIDAD_DEFECTO, precio_unitario=precio)])
         caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
                            items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
                            referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
@@ -646,7 +729,7 @@ async def etapa2_simulacion(
         f56 = _folio_en_rango(caf56, folio_56 or caf56.desde, "T56")
 
         caso_t33 = CasoSet(numero="SIM-1", tipo_doc=33,
-                           items=[ItemSet(nombre=producto, cantidad=2, precio_unitario=precio)])
+                           items=[ItemSet(nombre=producto, cantidad=SIM_CANTIDAD_DEFECTO, precio_unitario=precio)])
         caso_t61 = CasoSet(numero="SIM-2", tipo_doc=61,
                            items=[ItemSet(nombre=producto, cantidad=1, precio_unitario=precio)],
                            referencia_caso="SIM-1", razon_referencia="Devolucion mercaderia")
@@ -677,13 +760,16 @@ async def etapa2_simulacion(
 
     dtes_parsed = parse_envio_dte(envio_xml)
     rut_clean   = emisor_data["rut"].replace("-", "")
-    out_dir     = get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="etapa2")
+    # La simulación de Factura de Compra lleva archivo y carpeta propios para no
+    # pisar ni confundirse con el EnvioDTE de la Etapa 2 básica.
+    out_dir     = get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="etapa2_compra" if modo == "compra" else "etapa2")
+    envio_name  = f"EnvioDTE_COMPRA_SIM_{rut_clean}.xml" if modo == "compra" else f"EnvioDTE_{rut_clean}.xml"
     resultados  = []
     zip_buf     = io.BytesIO()
 
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"EnvioDTE_{rut_clean}.xml", envio_xml)
-        with open(os.path.join(out_dir, f"EnvioDTE_{rut_clean}.xml"), "wb") as fh:
+        zf.writestr(envio_name, envio_xml)
+        with open(os.path.join(out_dir, envio_name), "wb") as fh:
             fh.write(envio_xml if isinstance(envio_xml, bytes) else envio_xml.encode())
 
         for dte in dtes_parsed:

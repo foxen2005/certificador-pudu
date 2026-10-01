@@ -402,3 +402,17 @@ Orden XSD dentro de `TipoBultos`: CodTpoBultos, CantBultos, Marcas, IdContainer,
 También: con IndServicio 3/4/5, `TotClauVenta` no se inventa si el set no lo trae (el Formato DTE no lo exige en ese caso).
 
 **Sin causa confirmada**: el caso 2 también marcó "Linea 1 del Detalle". Esa línea (210 × 111, 5% de descuento, `DescuentoMonto` 1166 entero porque es MntImpType, `MontoItem` 22144) es **idéntica** a la que genera LibreDTE. Puede ser un efecto de los otros errores del mismo caso. Si vuelve a aparecer, el siguiente sospechoso es el redondeo de 1165.5.
+
+## 31. Factura de Compra (T46) separada del wizard principal (v1.13.0, 2026-10-01)
+
+**Pedido**: la certificación de documentos de compra va en Certificaciones adicionales, como Exportación y Guías. El SII certifica la Factura de Compra con su **propio set** ("SET FACTURA DE COMPRA": T46 → NC T61 → ND T56) y en su **propio envío**. No hay que confundirlo con el **Libro de Compras** (set básico, obligatorio para todos), que se queda en el wizard. En los dos sets reales que tenemos, "FACTURA DE COMPRA ELECTRONICA" aparece solo como una línea del Libro de Compras.
+
+**Cómo quedó**:
+- `/certificar` → `_certificar_core(solo="basico")`: deja fuera los casos de Factura de Compra y responde `casos_compra_excluidos`. Ya no recibe el CAF 46. Si un frontend anterior manda `caf_46` y el archivo trae ese set, responde 422 ("recarga la página") en vez de omitirlo en silencio.
+- `POST /adicionales/compra/set` → `_certificar_core(solo="compra")`: el **mismo** código que ya generaba el T46 (retención total, NC/ND encadenadas, PDFs), sin libros, con `EnvioDTE_COMPRA_{RUT}.xml`. Exige folio T61/T56: son los CAF del set básico y sus primeros folios ya se usaron (DTE-3-100).
+- `POST /adicionales/compra/simulacion` delega en `/etapa2` con modo "compra" (que sigue existiendo por compatibilidad); su ZIP lleva `EnvioDTE_COMPRA_SIM_{RUT}.xml`. `GET /adicionales/compra/simulacion/defaults` entrega producto, precio, cantidad, tasa de IVA y receptor (constantes `SIM_*` y `TASA_IVA` de `main.py`).
+- Qué caso es "de compra": **la sección manda**. `set_parser` marca cada caso con el encabezado `SET ...` bajo el que aparece (`CasoSet.seccion`). La cadena de referencias a un T46 (`_marcar_retencion`) es el respaldo para archivos sin encabezados. Todo caso de la sección lleva retención, aunque su REFERENCIA no se pueda leer.
+
+**Bug del parser encontrado al probar**: una vez dentro del Libro de Compras, nunca salía. Cualquier set que viniera después en el mismo archivo se leía como libro. Ahora cualquier línea que empieza con `SET ` cierra la sección, y "LIBRO DE COMPRAS" solo abre el libro si está en un encabezado. El N° de atención del set de compra se lee normalizado (`NÚMERO DE ATENCIÓN` con tildes) y un "SET BASICO FACTURA DE COMPRA" ya no pisa el N° del set básico.
+
+**Verificación**: con los 12 archivos reales, el parser da el mismo resultado que antes. El EnvioDTE y el Libro de Ventas del set básico salen idénticos a la versión anterior (git worktree de HEAD, mismo día, sin firmas ni fechas). La cadena T46 se probó con el set de ejemplo de LibreDTE (`008-factura_compra.txt`) y un CAF T46 **sintético**: no hay un set real de Factura de Compra. Cuando llegue uno, probarlo antes de enviar.

@@ -277,10 +277,9 @@ function SetupStep({
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
-  const [caf46, setCaf46] = useState<File | null>(null);
   const [claveError, setClaveError] = useState(false);
 
-  const ready = !!pfx && !!datos && datosOk && !!(caf33 || caf56 || caf61 || caf46);
+  const ready = !!pfx && !!datos && datosOk && !!(caf33 || caf56 || caf61);
 
   async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
@@ -301,7 +300,7 @@ function SetupStep({
       return;
     }
     setClaveError(false);
-    onDone({ pfx: pfx!, datos: datos!, clave, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(caf46 && { "46": caf46 }) } });
+    onDone({ pfx: pfx!, datos: datos!, clave, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } });
   }
 
   return (
@@ -340,7 +339,8 @@ function SetupStep({
             <div>
               <strong className="text-foreground">CAF (Código de Autorización de Folios)</strong> — Solicítalo en
               <em> maullin.sii.cl → Boletas y Documentos → Solicitar Folios</em>. Pide un CAF por
-              cada tipo de DTE que quieras certificar (T33, T56, T61, T46).
+              cada tipo de DTE del set básico (T33, T56, T61). La Factura de Compra (T46) se certifica aparte, en
+              Certificaciones adicionales.
             </div>
           </div>
         </CardContent>
@@ -359,7 +359,6 @@ function SetupStep({
           <UploadBox label="CAF Factura Electrónica" hint="dte33d1a100.xml" icon="🧾" accept=".xml" optionalTag="T33" file={caf33} onChange={setCaf33} />
           <UploadBox label="CAF Nota de Crédito" hint="dte61d1a100.xml" icon="📉" accept=".xml" optionalTag="T61" file={caf61} onChange={setCaf61} />
           <UploadBox label="CAF Nota de Débito" hint="dte56d1a100.xml" icon="📈" accept=".xml" optionalTag="T56" file={caf56} onChange={setCaf56} />
-          <UploadBox label="CAF Factura de Compra" hint="dte46d1a100.xml" icon="🛒" accept=".xml" optionalTag="T46" file={caf46} onChange={setCaf46} />
         </div>
       </div>
 
@@ -411,7 +410,6 @@ function Etapa1Step({
       if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
-      if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
       if (nroCompras) fd.append("nro_atencion_compras", nroCompras);
@@ -523,6 +521,16 @@ function Etapa1Step({
 
       {result && (
         <div className="space-y-5">
+          {!!result.casos_compra_excluidos?.length && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Este archivo también trae el set de <strong>Factura de Compra</strong> (casos{" "}
+                {result.casos_compra_excluidos.join(", ")}). No va en este envío: genéralo en{" "}
+                <Link to="/adicionales" search={{ mod: "compra" }} className="font-semibold text-primary hover:underline">Certificaciones adicionales → Factura de Compra</Link>.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="flex items-center gap-3 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
             <CheckCircle2 className="h-5 w-5 text-green-600" />
             <div className="flex-1 text-sm text-green-800">
@@ -568,14 +576,13 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
   const [folio33, setFolio33] = useState("");
-  const [folio46, setFolio46] = useState("");
   const [folio61, setFolio61] = useState("");
   const [folio56, setFolio56] = useState("");
-  const [modo, setModo] = useState<"basico" | "compra">("basico");
 
+  // Solo Set Básico. La simulación de Factura de Compra (T46) se movió a
+  // Certificaciones adicionales → Factura de Compra (/adicionales/compra/simulacion).
   const cafsBasico = ["33", "61", "56"].filter(t => !shared.cafs[t]);
-  const cafsCompra = ["46", "61", "56"].filter(t => !shared.cafs[t]);
-  const listo = modo === "compra" ? cafsCompra.length === 0 : cafsBasico.length === 0;
+  const listo = cafsBasico.length === 0;
 
   async function generate() {
     setLoading(true);
@@ -584,16 +591,11 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       const fd = new FormData();
       fd.append("datos", shared.datos);
       fd.append("pfx", shared.pfx);
-      fd.append("modo", modo);
-      // Los folios van SIEMPRE (ambos modos): sin ellos el backend arranca en el
-      // primer folio del CAF, que ya se consumió en Etapa 1 → DTE-3-100 repetido.
-      if (modo === "compra") {
-        if (shared.cafs["46"]) fd.append("caf_46", shared.cafs["46"]);
-        if (folio46.trim()) fd.append("folio_46", folio46.trim());
-      } else {
-        if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
-        if (folio33.trim()) fd.append("folio_33", folio33.trim());
-      }
+      fd.append("modo", "basico");
+      // Los folios van SIEMPRE: sin ellos el backend arranca en el primer folio
+      // del CAF, que ya se consumió en Etapa 1 → DTE-3-100 repetido.
+      if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
+      if (folio33.trim()) fd.append("folio_33", folio33.trim());
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (folio61.trim()) fd.append("folio_61", folio61.trim());
@@ -614,62 +616,25 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
         <h2 className="text-lg font-semibold">Etapa 2 — Simulación</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Emite DTEs reales a la empresa de prueba <strong>C&C SPA (77221286-0)</strong>.
-          Elige qué tipo de simulación necesitas según lo que estés certificando.
+          ¿Certificas Factura de Compra (T46)? Su simulación está en{" "}
+          <Link to="/adicionales" search={{ mod: "compra" }} className="font-semibold text-primary hover:underline">Certificaciones adicionales</Link>.
         </p>
-      </div>
-
-      {/* Selector de modo */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => setModo("basico")}
-          className={`rounded-lg border p-4 text-left transition-colors ${modo === "basico" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
-        >
-          <p className="font-semibold">🧾 Set Básico</p>
-          <p className="mt-1 text-xs text-muted-foreground">Factura (T33) → Nota de Crédito (T61) → Nota de Débito (T56)</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setModo("compra")}
-          className={`rounded-lg border p-4 text-left transition-colors ${modo === "compra" ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted"}`}
-        >
-          <p className="font-semibold">🛒 Factura de Compra</p>
-          <p className="mt-1 text-xs text-muted-foreground">Factura de Compra (T46) con retención total del IVA</p>
-        </button>
       </div>
 
       <Card className="border-amber-200 bg-amber-50">
         <CardContent className="pt-4 text-sm text-amber-800 space-y-2">
-          {modo === "basico" ? (
-            <>
-              <p className="font-semibold">Simulación Set Básico — 3 DTEs</p>
-              <div className="flex gap-2"><span>🧾</span><span><strong>T33 — Factura:</strong> 2 × Producto @ $35.000 → Total $83.300 (con IVA 19%)</span></div>
-              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad → $41.650</span></div>
-              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span></div>
-            </>
-          ) : (
-            <>
-              <p className="font-semibold">Simulación Factura de Compra — 3 DTEs</p>
-              <div className="flex gap-2"><span>🛒</span><span><strong>T46 — Factura de Compra:</strong> 2 × Producto @ $35.000 → Neto $70.000, IVA retenido $13.300 (el proveedor recibe solo el neto)</span></div>
-              <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución de 1 unidad, referencia la Factura de Compra (IVA retenido)</span></div>
-              <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior (IVA retenido)</span></div>
-            </>
-          )}
+          <p className="font-semibold">Simulación Set Básico — 3 DTEs</p>
+          <div className="flex gap-2"><span>🧾</span><span><strong>T33 — Factura:</strong> 2 × Producto @ $35.000 → Total $83.300 (con IVA 19%)</span></div>
+          <div className="flex gap-2"><span>📉</span><span><strong>T61 — Nota de Crédito:</strong> Devolución parcial de 1 unidad → $41.650</span></div>
+          <div className="flex gap-2"><span>📈</span><span><strong>T56 — Nota de Débito:</strong> Anula la NC anterior → $41.650</span></div>
         </CardContent>
       </Card>
 
       <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
-        {modo === "compra" ? (
-          <div className="space-y-1">
-            <Label htmlFor="folio-46-sim">Folio T46 — Factura de Compra</Label>
-            <Input id="folio-46-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio46} onChange={e => setFolio46(e.target.value)} />
-          </div>
-        ) : (
-          <div className="space-y-1">
-            <Label htmlFor="folio-33-sim">Folio T33 — Factura</Label>
-            <Input id="folio-33-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio33} onChange={e => setFolio33(e.target.value)} />
-          </div>
-        )}
+        <div className="space-y-1">
+          <Label htmlFor="folio-33-sim">Folio T33 — Factura</Label>
+          <Input id="folio-33-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio33} onChange={e => setFolio33(e.target.value)} />
+        </div>
         <div className="space-y-1">
           <Label htmlFor="folio-61-sim">Folio T61 — Nota de Crédito</Label>
           <Input id="folio-61-sim" type="number" min="1" placeholder="primer folio del CAF" value={folio61} onChange={e => setFolio61(e.target.value)} />
@@ -688,9 +653,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            {modo === "compra"
-              ? `Faltan CAFs para la Factura de Compra: ${cafsCompra.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`
-              : `Faltan CAFs para el Set Básico: ${cafsBasico.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`}
+            {`Faltan CAFs para el Set Básico: ${cafsBasico.map(t => "T" + t).join(", ")}. Súbelos en Configuración.`}
           </AlertDescription>
         </Alert>
       )}
@@ -698,7 +661,7 @@ function Etapa2Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
       <Button size="lg" disabled={loading || !listo} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando simulación…</>
-          : modo === "compra" ? "Generar Factura de Compra" : "Generar DTEs de Simulación"}
+          : "Generar DTEs de Simulación"}
       </Button>
 
       {error && (
@@ -1006,7 +969,7 @@ function CertWizard() {
 
             <div className="mt-6 rounded-lg border p-3 text-xs">
               <p className="mb-1 font-semibold text-foreground">Certificaciones adicionales</p>
-              <p className="text-muted-foreground">Exportación (110/111/112), Factura de Compra, Guías, Exenta — sets aparte del básico.</p>
+              <p className="text-muted-foreground">Exportación (110/111/112), Guías (52), Factura de Compra (46), Exenta — sets aparte del básico.</p>
               <Link to="/adicionales" className="mt-2 inline-block font-semibold text-primary hover:underline">Abrir módulos →</Link>
             </div>
 

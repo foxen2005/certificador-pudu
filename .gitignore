@@ -45,3 +45,6 @@ Thumbs.db
 .output/
 .wrangler/
 graphify-out/
+
+# entorno local de pruebas del backend (no se sube)
+.venv-test/

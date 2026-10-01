@@ -31,6 +31,10 @@ class CasoSet:
     # Factura de Compra (T46) y NC/ND de su cadena: retención total del IVA
     # (cambio de sujeto). Se resuelve en main.py recorriendo las referencias.
     con_retencion: bool = False
+    # Encabezado "SET ... - NUMERO DE ATENCION" bajo el que aparece el caso
+    # (normalizado, ej. "SET BASICO", "SET FACTURA DE COMPRA"). None si el
+    # archivo no trae encabezados. Separa el set de Factura de Compra del básico.
+    seccion: Optional[str] = None
 
 
 @dataclass
@@ -52,6 +56,8 @@ class SetDePruebas:
     nro_atencion_basico: Optional[str] = None
     nro_atencion_ventas: Optional[str] = None
     nro_atencion_compras: Optional[str] = None
+    # Set de DTE "SET FACTURA DE COMPRA" (T46 → NC → ND), distinto del Libro de Compras
+    nro_atencion_factura_compra: Optional[str] = None
     casos: list[CasoSet] = field(default_factory=list)
     libro_compras: list[LibroCompraItem] = field(default_factory=list)
     fct_prop_iva_uso_comun: float = 0.6   # factor de proporcionalidad IVA uso común
@@ -123,8 +129,11 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
     # Extraer números de atención
     for line in lines:
         ln = _normalize(line)
-        m = re.search(r'SET BASICO.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
+        m = re.search(r'SET (?:BASICO )?FACTURA DE COMPRA.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
         if m:
+            result.nro_atencion_factura_compra = m.group(1)
+        m = re.search(r'SET BASICO.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
+        if m and 'FACTURA DE COMPRA' not in ln:
             result.nro_atencion_basico = m.group(1)
         m = re.search(r'SET LIBRO DE VENTAS.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
         if m:
@@ -144,6 +153,7 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
     caso_pattern = re.compile(r'^CASO\s+(\S+)', re.IGNORECASE)
     current_caso: Optional[CasoSet] = None
     in_libro_compras = False
+    seccion_actual: Optional[str] = None
 
     # Estado para el libro de compras (acumula campos por entrada)
     lc_current: Optional[dict] = None
@@ -155,8 +165,22 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
         if not line or line.startswith('=') or line.startswith('-'):
             continue
 
+        # ── Encabezado de otro set (p. ej. SET FACTURA DE COMPRA después del
+        # libro de compras): cierra la sección anterior. Antes, una vez dentro
+        # del libro de compras, el resto del archivo se leía como libro.
+        # Basta "SET ..." al inicio: el N° de atención puede venir en otra línea.
+        if ln.startswith('SET ') and 'LIBRO DE COMPRAS' not in ln:
+            if in_libro_compras and lc_current:
+                _flush_lc_entry(lc_current, result)
+            in_libro_compras = False
+            lc_current = None
+            current_caso = None
+            seccion_actual = re.split(r'\s+-\s+|\s+NUMERO DE ATENCION', ln)[0].strip()
+            continue
+
         # ── Detectar inicio del libro de compras ──────────────────────────────
-        if 'LIBRO DE COMPRAS' in ln:
+        # Solo en un encabezado (no en una observación que lo mencione).
+        if 'LIBRO DE COMPRAS' in ln and (ln.startswith('SET ') or 'NUMERO DE ATENCION' in ln):
             in_libro_compras = True
             current_caso = None
             lc_current = None
@@ -169,7 +193,7 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
         # ── Detectar inicio de CASO ───────────────────────────────────────────
         m = caso_pattern.match(line)
         if m:
-            current_caso = CasoSet(numero=m.group(1), tipo_doc=33)
+            current_caso = CasoSet(numero=m.group(1), tipo_doc=33, seccion=seccion_actual)
             result.casos.append(current_caso)
             continue
 

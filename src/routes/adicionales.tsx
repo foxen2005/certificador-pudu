@@ -13,12 +13,14 @@ import { UploadBox } from "@/components/sii/UploadBox";
 import { VersionBadge } from "@/components/VersionBadge";
 import { decodificarDatos, validarDatosTxt } from "@/lib/datos-txt";
 
-// Certificaciones adicionales — módulo INDEPENDIENTE del wizard del set básico
-// (src/routes/index.tsx no se toca). Cada tipo de documento que el SII certifica
-// con su propio set vive aquí: Exportación (110/111/112) hoy; Guía (52) y
-// Factura Exenta (34) cuando tengamos su set de pruebas.
+// Certificaciones adicionales — módulo INDEPENDIENTE del wizard del set básico.
+// Cada tipo de documento que el SII certifica con su propio set vive aquí:
+// Exportación (110/111/112), Guía de Despacho (52), Factura de Compra (46,
+// sacada del wizard principal) y Factura Exenta (34) cuando tengamos su set.
 
 export const Route = createFileRoute("/adicionales")({
+  validateSearch: (search: Record<string, unknown>): { mod?: string } =>
+    typeof search.mod === "string" ? { mod: search.mod } : {},
   head: () => ({
     meta: [
       { title: "Certificaciones adicionales — Certificador DTE" },
@@ -191,7 +193,7 @@ type CafSlot = { file: File | null; rango: { desde: number; hasta: number } | nu
 const cafVacio = (): CafSlot => ({ file: null, rango: null, error: "", folio: "" });
 
 function CafConFolio({ tipo, label, icon, slot, onChange }: {
-  tipo: 52 | 110 | 111 | 112;
+  tipo: 46 | 52 | 56 | 61 | 110 | 111 | 112;
   label: string;
   icon: string;
   slot: CafSlot;
@@ -873,7 +875,7 @@ function Guias({ shared }: { shared: Shared }) {
               { text: "Muestras impresas: subir los PDF de este mismo ZIP (tributario de los 3, cedible solo de las ventas)", highlight: true },
             ]}
           />
-          <Results data={result} filename="guias_set.zip" />
+          <Results data={result} filename="guias_set.zip" etiquetaSet="Set Guía de Despacho" />
         </div>
       )}
 
@@ -1048,6 +1050,277 @@ function Guias({ shared }: { shared: Shared }) {
   );
 }
 
+// ─── Factura de Compra 46 ────────────────────────────────────────────────────
+// Antes vivía en el wizard principal (CAF T46 en Configuración + modo "compra"
+// en la Etapa 2). El SII la certifica con su propio set y en su propio envío.
+
+interface CompraResult extends BatchResult {
+  nro_atencion?: string;
+  archivo?: string;
+  casos?: { numero: string; tipo: number; folio: number }[];
+  folios?: Record<string, number>;
+}
+
+const TIPOS_COMPRA = [46, 61, 56] as const;
+const NOMBRE_COMPRA: Record<number, string> = { 46: "Factura de Compra", 61: "Nota de Crédito", 56: "Nota de Débito" };
+
+function FacturaCompra({ shared }: { shared: Shared }) {
+  const [setF, setSetF] = useState<File | null>(null);
+  const [cafs, setCafs] = useState<Record<46 | 61 | 56, CafSlot>>({ 46: cafVacio(), 61: cafVacio(), 56: cafVacio() });
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<CompraResult | null>(null);
+  const [error, setError] = useState("");
+  // Simulación: folios propios (el set ya consume los primeros) y datos precargados
+  // desde el backend, que es el dueño de los valores de la Etapa 2.
+  const [sim, setSim] = useState({ folio46: "", folio61: "", folio56: "", producto: "", precio: "" });
+  const [defaults, setDefaults] = useState<{ cantidad: number; tasa_iva: number; receptor: { rut: string; razon_social: string } } | null>(null);
+  const [resultSim, setResultSim] = useState<CompraResult | null>(null);
+  const [loadingSim, setLoadingSim] = useState(false);
+  const [errorSim, setErrorSim] = useState("");
+
+  useEffect(() => {
+    let cancelado = false;
+    fetch("/api/sii/adicionales/compra/simulacion/defaults", { headers: { [WIZARD_KEY_HEADER]: encodeURIComponent(shared.clave) } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { producto: string; precio: number; cantidad: number; tasa_iva: number; receptor: { rut: string; razon_social: string } } | null) => {
+        if (!d || cancelado) return;
+        setDefaults({ cantidad: d.cantidad, tasa_iva: d.tasa_iva, receptor: d.receptor });
+        setSim((s) => ({ ...s, producto: s.producto || d.producto, precio: s.precio || String(d.precio) }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, [shared.clave]);
+
+  const cafsOk = TIPOS_COMPRA.every((t) => cafs[t].file && cafs[t].rango && !cafs[t].error);
+  const enRango = (t: 46 | 61 | 56, folio: string) => {
+    const r = cafs[t].rango;
+    return !r || folio.trim() === "" || (Number(folio) >= r.desde && Number(folio) <= r.hasta);
+  };
+  // T61/T56 son los CAF del set básico, que ya usó sus primeros folios: aquí
+  // el folio es obligatorio (en blanco el backend tomaría el primero → DTE-3-100).
+  const foliosSetOk =
+    TIPOS_COMPRA.every((t) => enRango(t, cafs[t].folio)) && cafs[61].folio.trim() !== "" && cafs[56].folio.trim() !== "";
+  const foliosSimOk =
+    enRango(46, sim.folio46) && enRango(61, sim.folio61) && enRango(56, sim.folio56) &&
+    sim.folio46.trim() !== "" && sim.folio61.trim() !== "" && sim.folio56.trim() !== "";
+  const listoSet = !!setF && cafsOk && foliosSetOk;
+  const listoSim = cafsOk && foliosSimOk && sim.producto.trim() !== "" && Number(sim.precio) > 0;
+
+  function appendCafs(fd: FormData) {
+    fd.append("datos", shared.datos);
+    fd.append("pfx", shared.pfx);
+    for (const t of TIPOS_COMPRA) fd.append(`caf_${t}`, cafs[t].file!);
+  }
+
+  async function generarSet() {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("set_pruebas", setF!);
+      appendCafs(fd);
+      for (const t of TIPOS_COMPRA) if (cafs[t].folio.trim()) fd.append(`folio_${t}`, cafs[t].folio.trim());
+      setResult((await postForm("/api/sii/adicionales/compra/set", fd, shared.clave)) as CompraResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generarSim() {
+    setLoadingSim(true);
+    setErrorSim("");
+    setResultSim(null);
+    try {
+      const fd = new FormData();
+      appendCafs(fd);
+      fd.append("folio_46", sim.folio46.trim());
+      fd.append("folio_61", sim.folio61.trim());
+      fd.append("folio_56", sim.folio56.trim());
+      fd.append("producto", sim.producto.trim());
+      fd.append("precio", sim.precio.trim());
+      setResultSim((await postForm("/api/sii/adicionales/compra/simulacion", fd, shared.clave)) as CompraResult);
+    } catch (e) {
+      setErrorSim((e as Error).message);
+    } finally {
+      setLoadingSim(false);
+    }
+  }
+
+  const setS = (k: keyof typeof sim) => (e: ChangeEvent<HTMLInputElement>) => setSim((s) => ({ ...s, [k]: e.target.value }));
+  const cantidad = defaults?.cantidad ?? 2;
+  const tasaIva = defaults?.tasa_iva ?? 19;
+  const neto = cantidad * (Number(sim.precio) || 0);
+  const clp = (n: number) => `$${n.toLocaleString("es-CL")}`;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><ShoppingCart className="h-5 w-5 text-primary" /> Factura de Compra (46)</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          La emite el <strong>comprador</strong> y retiene el total del IVA (cambio de sujeto): el proveedor recibe solo el neto. Se certifica
+          aparte del set básico, con la cadena <strong>T46 → Nota de Crédito (T61) → Nota de Débito (T56)</strong>, y la NC y ND heredan la retención.
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <CafConFolio tipo={46} label="CAF Factura de Compra" icon="🛒" slot={cafs[46]} onChange={(s) => setCafs((c) => ({ ...c, 46: s }))} />
+        <CafConFolio tipo={61} label="CAF Nota de Crédito" icon="📉" slot={cafs[61]} onChange={(s) => setCafs((c) => ({ ...c, 61: s }))} />
+        <CafConFolio tipo={56} label="CAF Nota de Débito" icon="📈" slot={cafs[56]} onChange={(s) => setCafs((c) => ({ ...c, 56: s }))} />
+      </div>
+
+      <Alert className="border-amber-300 bg-amber-50 text-amber-900 [&>svg]:text-amber-700">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          Los CAF T61 y T56 son los mismos del set básico: usa folios que <strong>no</strong> hayas enviado ahí (el SII rechaza folios repetidos
+          con DTE-3-100). Los folios de arriba son para el set (A); la simulación (B) pide los suyos. Guarda cada ZIP: los PDF de muestra
+          deben salir del mismo XML que subas.
+        </AlertDescription>
+      </Alert>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">A · Set de pruebas del SII</CardTitle>
+          <CardDescription>
+            Sube el <code className="rounded bg-muted px-1">SIISetDePruebas*.txt</code> que trae los casos de Factura de Compra. Si viene en el
+            mismo archivo que el set básico, se toman solo esos casos (el wizard principal ahora los deja fuera). No genera libros: el Libro de
+            Compras es parte del set básico.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="max-w-sm">
+            <UploadBox label="SIISetDePruebas*.txt" hint="Con los casos DOCUMENTO FACTURA DE COMPRA ELECTRONICA" icon="📋" accept=".txt" file={setF} onChange={setSetF} />
+          </div>
+          <Button size="lg" disabled={!listoSet || loading} onClick={generarSet}>
+            {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando set de Factura de Compra…</> : "Generar documentos del set"}
+          </Button>
+          {!cafsOk && <p className="text-xs text-muted-foreground">Sube los tres CAF (46, 61, 56) arriba para habilitar el set y la simulación.</p>}
+          {cafsOk && !foliosSetOk && (
+            <p className="text-xs text-muted-foreground">Indica arriba el folio T61 y T56 (obligatorios: esos CAF son los del set básico).</p>
+          )}
+          {error && (
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          {result && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-4 py-3">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                <div className="flex-1 text-sm">
+                  <strong>EnvioDTE de Factura de Compra generado</strong>
+                  {result.nro_atencion ? <> — N° atención {result.nro_atencion}</> : null}. Descarga y guarda el ZIP.
+                </div>
+                <Button size="sm" variant="outline" onClick={() => downloadB64(result.zip_base64 ?? "", "factura_compra_set.zip")}>
+                  <Download className="mr-1 h-4 w-4" /> Descargar ZIP
+                </Button>
+              </div>
+              {result.casos && (
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/60 text-left"><tr><th className="p-2">Caso</th><th className="p-2">Documento</th><th className="p-2">Folio</th></tr></thead>
+                    <tbody>
+                      {result.casos.map((c) => (
+                        <tr key={c.numero} className="border-t">
+                          <td className="p-2 font-mono">{c.numero}</td><td className="p-2">T{c.tipo} — {NOMBRE_COMPRA[c.tipo] ?? ""}</td><td className="p-2 font-mono">{c.folio}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <PortalGuide
+                title="Subir al portal SII"
+                url="https://maullin.sii.cl/cgi_dte/UPL/DTEUpload"
+                steps={[
+                  { text: `Certificación DTE → Envío de Documentos → subir ${result.archivo ?? "EnvioDTE_COMPRA_{RUT}.xml"} (en un envío aparte del set básico)`, highlight: true },
+                  { text: "Esperar EPR + AOK en los 3 documentos; luego declarar el set de Factura de Compra en 'Revisión del Set'" },
+                  { text: "Muestras impresas: PDF de este mismo ZIP (la Factura de Compra lleva también su copia cedible)", highlight: true },
+                ]}
+              />
+              <Results data={result} filename="factura_compra_set.zip" etiquetaSet="Set Factura de Compra" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">B · Simulación (Etapa 2)</CardTitle>
+          <CardDescription>
+            La misma que antes estaba en la Etapa 2 del wizard principal: {cantidad} × producto a la empresa de prueba
+            {defaults ? <> <strong>{defaults.receptor.razon_social} ({defaults.receptor.rut})</strong></> : null}, NC por 1 unidad y ND que anula la NC.
+            Viene precargada; puedes cambiar el producto y el precio por los reales.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Fieldset legend="Folios de la simulación" hint="Distintos de los usados en el set (A) y en el set básico.">
+            {([["folio46", 46], ["folio61", 61], ["folio56", 56]] as const).map(([k, t]) => (
+              <div key={k} className="space-y-1">
+                <Label htmlFor={`sim-compra-${t}`}>Folio T{t} — {NOMBRE_COMPRA[t]}<span className="text-destructive"> *</span></Label>
+                <Input
+                  id={`sim-compra-${t}`}
+                  type="number"
+                  min={cafs[t].rango?.desde ?? 1}
+                  max={cafs[t].rango?.hasta}
+                  placeholder={cafs[t].rango ? `${cafs[t].rango!.desde}–${cafs[t].rango!.hasta}` : "folio del CAF"}
+                  value={sim[k]}
+                  onChange={setS(k)}
+                  required
+                  aria-required
+                  aria-invalid={!enRango(t, sim[k])}
+                />
+              </div>
+            ))}
+          </Fieldset>
+          <Fieldset legend="Detalle">
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor="sim-compra-prod">Producto<span className="text-destructive"> *</span></Label>
+              <Input id="sim-compra-prod" value={sim.producto} onChange={setS("producto")} required aria-required />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="sim-compra-prec">Precio neto unitario<span className="text-destructive"> *</span></Label>
+              <Input id="sim-compra-prec" type="number" min={1} value={sim.precio} onChange={setS("precio")} required aria-required />
+            </div>
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              Factura de Compra: neto {clp(neto)}, IVA retenido {clp(Math.round((neto * tasaIva) / 100))}; el proveedor recibe {clp(neto)}.
+            </p>
+          </Fieldset>
+          <Button size="lg" disabled={!listoSim || loadingSim} onClick={generarSim}>
+            {loadingSim ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando simulación…</> : "Generar simulación de Factura de Compra"}
+          </Button>
+          {errorSim && (
+            <Alert variant="destructive" role="alert">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorSim}</AlertDescription>
+            </Alert>
+          )}
+          {resultSim && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 rounded-lg border border-success/40 bg-success/5 px-4 py-3">
+                <CheckCircle2 className="h-5 w-5 text-success" />
+                <div className="flex-1 text-sm">
+                  <strong>Simulación generada</strong>
+                  {resultSim.folios ? <> — folios {Object.entries(resultSim.folios).map(([t, f]) => `${t} ${f}`).join(" · ")}</> : null}. Descarga y guarda el ZIP.
+                </div>
+                <Button size="sm" variant="outline" onClick={() => downloadB64(resultSim.zip_base64 ?? "", "factura_compra_simulacion.zip")}>
+                  <Download className="mr-1 h-4 w-4" /> Descargar ZIP
+                </Button>
+              </div>
+              <Results data={resultSim} filename="factura_compra_simulacion.zip" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Módulos pendientes de set ───────────────────────────────────────────────
 
 function Pendiente({ titulo, icon, detalle }: { titulo: string; icon: ReactNode; detalle: string }) {
@@ -1077,13 +1350,15 @@ function Pendiente({ titulo, icon, detalle }: { titulo: string; icon: ReactNode;
 const MODULOS = [
   { key: "exportacion", label: "Exportación (110/111/112)", Icon: Globe, estado: "disponible" },
   { key: "guia", label: "Guía de Despacho (52)", Icon: Truck, estado: "disponible" },
+  { key: "compra", label: "Factura de Compra (46)", Icon: ShoppingCart, estado: "disponible" },
   { key: "exenta", label: "Factura Exenta (34)", Icon: FileText, estado: "requiere set" },
 ] as const;
 type ModKey = (typeof MODULOS)[number]["key"];
 
 function Adicionales() {
   const [shared, setShared] = useState<Shared | null>(null);
-  const [mod, setMod] = useState<ModKey>("exportacion");
+  const { mod: modInicial } = Route.useSearch();
+  const [mod, setMod] = useState<ModKey>(MODULOS.some((m) => m.key === modInicial) ? (modInicial as ModKey) : "exportacion");
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -1120,18 +1395,7 @@ function Adicionales() {
                   {m.estado === "requiere set" && <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-label="Requiere set de pruebas del SII" />}
                 </button>
               ))}
-              <Link
-                to="/"
-                className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted"
-              >
-                <ShoppingCart className="h-4 w-4 shrink-0" />
-                <span className="flex-1">Factura de Compra (46)</span>
-                <Badge variant="outline" className="text-[10px]">en wizard</Badge>
-              </Link>
             </nav>
-            <p className="text-xs text-muted-foreground">
-              La Factura de Compra ya está en el wizard principal: CAF T46 en Etapa 1 y modo "Factura de Compra" en Etapa 2.
-            </p>
           </div>
         </aside>
 
@@ -1139,6 +1403,7 @@ function Adicionales() {
           {!shared && <Setup onDone={setShared} />}
           {shared && mod === "exportacion" && <Exportacion shared={shared} />}
           {shared && mod === "guia" && <Guias shared={shared} />}
+          {shared && mod === "compra" && <FacturaCompra shared={shared} />}
           {shared && mod === "exenta" && (
             <Pendiente
               icon={<FileText className="h-5 w-5 text-primary" />}

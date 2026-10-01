@@ -27,6 +27,8 @@ export interface BatchResult {
   nro_atencion_compras?: string;
   libro_ventas_generado?: boolean;
   libro_compras_generado?: boolean;
+  /** Casos de Factura de Compra del archivo que /certificar dejó fuera (van en /adicionales). */
+  casos_compra_excluidos?: string[];
   documentos: number;
   pdfs_generados: number;
   aprobados: number;
@@ -132,9 +134,12 @@ function DocItem({ r }: { r: DocResult }) {
 export function Results({
   data,
   filename = "certificacion.zip",
+  etiquetaSet = "Set Básico",
 }: {
   data: BatchResult;
   filename?: string;
+  /** Nombre del set al que pertenece `nro_atencion` (los módulos adicionales no son el Set Básico). */
+  etiquetaSet?: string;
 }) {
   function descargar() {
     if (!data.zip_base64) return;
@@ -149,7 +154,7 @@ export function Results({
       {/* Números de atención */}
       <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
         {data.nro_atencion && (
-          <span>Set Básico: <b className="text-foreground">{data.nro_atencion}</b></span>
+          <span>{etiquetaSet}: <b className="text-foreground">{data.nro_atencion}</b></span>
         )}
         {data.nro_atencion_ventas && (
           <span>Libro Ventas: <b className="text-foreground">{data.nro_atencion_ventas}</b></span>
