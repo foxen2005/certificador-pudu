@@ -29,6 +29,12 @@ export interface BatchResult {
   libro_compras_generado?: boolean;
   /** Casos de Factura de Compra del archivo que /certificar dejó fuera (van en /adicionales). */
   casos_compra_excluidos?: string[];
+  /** Casos del SET FACTURA EXENTA que no se generaron (casilla sin marcar). */
+  casos_exenta_excluidos?: string[];
+  /** N° de atención del SET FACTURA EXENTA, cuando se generó junto al básico. */
+  nro_atencion_exenta?: string | null;
+  /** Casilla de Factura Exenta marcada pero el archivo no trae ese set. */
+  aviso_exenta?: string | null;
   documentos: number;
   pdfs_generados: number;
   aprobados: number;
@@ -155,6 +161,9 @@ export function Results({
       <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
         {data.nro_atencion && (
           <span>{etiquetaSet}: <b className="text-foreground">{data.nro_atencion}</b></span>
+        )}
+        {data.nro_atencion_exenta && (
+          <span>Set Factura Exenta: <b className="text-foreground">{data.nro_atencion_exenta}</b></span>
         )}
         {data.nro_atencion_ventas && (
           <span>Libro Ventas: <b className="text-foreground">{data.nro_atencion_ventas}</b></span>

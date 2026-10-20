@@ -416,3 +416,21 @@ También: con IndServicio 3/4/5, `TotClauVenta` no se inventa si el set no lo tr
 **Bug del parser encontrado al probar**: una vez dentro del Libro de Compras, nunca salía. Cualquier set que viniera después en el mismo archivo se leía como libro. Ahora cualquier línea que empieza con `SET ` cierra la sección, y "LIBRO DE COMPRAS" solo abre el libro si está en un encabezado. El N° de atención del set de compra se lee normalizado (`NÚMERO DE ATENCIÓN` con tildes) y un "SET BASICO FACTURA DE COMPRA" ya no pisa el N° del set básico.
 
 **Verificación**: con los 12 archivos reales, el parser da el mismo resultado que antes. El EnvioDTE y el Libro de Ventas del set básico salen idénticos a la versión anterior (git worktree de HEAD, mismo día, sin firmas ni fechas). La cadena T46 se probó con el set de ejemplo de LibreDTE (`008-factura_compra.txt`) y un CAF T46 **sintético**: no hay un set real de Factura de Compra. Cuando llegue uno, probarlo antes de enviar.
+
+## 32. Factura Exenta (34) como opción del set básico (v1.14.0, 2026-10-20)
+
+**Pedido**: la Factura Exenta va dentro del set básico, **opcional**: solo se genera si se marca "También certifico Factura Exenta (34)" en Configuración, que además pide el CAF T34. Sin la casilla todo queda como antes y los casos del SET FACTURA EXENTA se dejan fuera con aviso.
+
+**Set real** (76601455-0, `sets/referencia_76601455/SIISetDePruebas766014550_con_exenta.txt`, atención 5140931): el `SET FACTURA EXENTA` viene **después** del Libro de Compras, con los casos pegados (sin líneas en blanco), y con la indicación *"No se debe señalar el monto IVA 19% en los documentos de Factura No Afecta o Exenta (sólo monto Exento y monto Total)"*.
+
+**Reglas aplicadas (todas con fuente)**:
+- Envío: básico + exenta en el mismo EnvioDTE y en el orden del archivo. Instrucciones del Set de Pruebas: el envío a revisión lleva *"todos los documentos de los Sets de pruebas y en el mismo orden en que le fueron entregados"*.
+- Libro de Ventas: texto del SET LIBRO DE VENTAS: *"…con los documentos con que generó el set básico o el set de factura exenta, según corresponda. Si obtuvo ambos set, utilice los documentos del set básico"*.
+- NC/ND "MODIFICA MONTO" con solo VALOR UNITARIO: *"la diferencia se debe aplicar a todas las unidades del ítem"* (Instrucciones) → cantidad de la factura × valor. CodRef **3** (Formato DTE: 1 anula, 2 corrige texto, 3 corrige montos; LibreDTE igual). Antes caía en 1.
+- La exención se hereda en toda la cadena de la T34, **incluida la propia T34 en los casos**: el constructor la marcaba solo sobre una copia y el Libro de Ventas la sumaba como afecta con IVA.
+
+**Lector de sets**: ahora lee la tabla de ítems según su encabezado (`ITEM / CANTIDAD / UNIDAD MEDIDA / PRECIO|VALOR UNITARIO / DESCUENTO ITEM`). Antes, la columna de texto "Hora" y los tabuladores sueltos hacían que el precio quedara como cantidad y las T34 salieran en $0 (válidas contra el XSD, pero incorrectas). Si una fila no calza con su encabezado (celda en blanco), da un **error claro** en vez de correr columnas en silencio. La unidad va en `UnmdItem` (el PDF todavía no la muestra; no encontré regla que lo exija).
+
+**Verificación**: los 3 sets básicos reales (PUDU, 77314475, 76601455) salen idénticos a HEAD (EnvioDTE y Libro de Ventas, mismo día). Los 8 documentos del set real 5140931 coinciden con montos calculados a mano y validan contra el XSD. El PDF de la 34 muestra solo Monto Exento y Monto Total. **Probado con un CAF T34 sintético**: falta el CAF real de la empresa.
+
+**No tocado**: `backend/dte_builder.py`, `test_certificacion.py` y `firmar_libro_*.py` (implementación antigua por script, que el wizard no usa) no tienen estas reglas.

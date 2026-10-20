@@ -15,6 +15,8 @@ class ItemSet:
     precio_unitario: float
     descuento_pct: Optional[float] = None
     es_exento: bool = False
+    # Columna "UNIDAD MEDIDA" del set (ej. "Hora" en el SET FACTURA EXENTA) → UnmdItem
+    unidad: Optional[str] = None
 
 
 @dataclass
@@ -58,6 +60,8 @@ class SetDePruebas:
     nro_atencion_compras: Optional[str] = None
     # Set de DTE "SET FACTURA DE COMPRA" (T46 → NC → ND), distinto del Libro de Compras
     nro_atencion_factura_compra: Optional[str] = None
+    # "SET FACTURA EXENTA" (T34 → NC/ND): opcional, va junto al set básico
+    nro_atencion_exenta: Optional[str] = None
     casos: list[CasoSet] = field(default_factory=list)
     libro_compras: list[LibroCompraItem] = field(default_factory=list)
     fct_prop_iva_uso_comun: float = 0.6   # factor de proporcionalidad IVA uso común
@@ -132,6 +136,9 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
         m = re.search(r'SET (?:BASICO )?FACTURA DE COMPRA.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
         if m:
             result.nro_atencion_factura_compra = m.group(1)
+        m = re.search(r'SET FACTURA (?:NO AFECTA O )?EXENTA.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
+        if m:
+            result.nro_atencion_exenta = m.group(1)
         m = re.search(r'SET BASICO.*NUMERO DE ATENCION[:\s]+(\d+)', ln)
         if m and 'FACTURA DE COMPRA' not in ln:
             result.nro_atencion_basico = m.group(1)
@@ -154,6 +161,8 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
     current_caso: Optional[CasoSet] = None
     in_libro_compras = False
     seccion_actual: Optional[str] = None
+    # Columnas de la tabla de ítems del caso actual (según su encabezado ITEM ...)
+    columnas: Optional[list[str]] = None
 
     # Estado para el libro de compras (acumula campos por entrada)
     lc_current: Optional[dict] = None
@@ -195,6 +204,7 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
         if m:
             current_caso = CasoSet(numero=m.group(1), tipo_doc=33, seccion=seccion_actual)
             result.casos.append(current_caso)
+            columnas = None
             continue
 
         if current_caso is None:
@@ -232,7 +242,16 @@ def parse_set_pruebas(content: str) -> SetDePruebas:
             current_caso.ind_traslado = int(m_tr.group(1))
             continue
 
-        item = _try_parse_item(line)
+        # Encabezado de la tabla de ítems ("ITEM  CANTIDAD  UNIDAD MEDIDA  VALOR UNITARIO")
+        cols = _columnas_item(ln)
+        if cols is not None:
+            columnas = cols
+            continue
+
+        # Con encabezado reconocido se lee por columnas; si no calza, la lógica de siempre.
+        item = _parse_item_por_columnas(line, columnas) if columnas else None
+        if item is None:
+            item = _try_parse_item(line)
         if item:
             current_caso.items.append(item)
 
@@ -391,6 +410,77 @@ def _parse_libro_compras_line(ln: str, raw_line: str, result: SetDePruebas,
         return entry
 
     return current
+
+
+# Columnas de la tabla de ítems del set → campo de ItemSet. "VALOR UNITARIO" es el
+# nombre que usa el SET FACTURA EXENTA; "PRECIO UNITARIO", el del set básico.
+_COLS_ITEM = {
+    "CANTIDAD": "cantidad",
+    "UNIDAD MEDIDA": "unidad",
+    "PRECIO UNITARIO": "precio",
+    "VALOR UNITARIO": "precio",
+    "DESCUENTO ITEM": "descuento",
+}
+# Separador de columnas: cualquier espacio con un tabulador, o 2+ espacios.
+_SEP_COLS = re.compile(r'\s*\t\s*|\s{2,}')
+
+
+def _columnas_item(ln: str) -> Optional[list[str]]:
+    """Si `ln` es el encabezado de la tabla de ítems, devuelve sus columnas
+    (sin ITEM), ej. ["cantidad", "unidad", "precio"]. Si no, None."""
+    campos = _SEP_COLS.split(ln.strip())
+    if len(campos) < 2 or campos[0] != "ITEM":
+        return None
+    if not all(c in _COLS_ITEM for c in campos[1:]):
+        return None
+    return [_COLS_ITEM[c] for c in campos[1:]]
+
+
+def _num_set(s: str) -> float:
+    return float(s.replace('.', '').replace(',', '.'))
+
+
+def _parse_item_por_columnas(line: str, columnas: list[str]) -> Optional[ItemSet]:
+    """Lee una línea de ítem según las columnas del encabezado. Resuelve los casos
+    que la lectura por patrón no entendía: la columna de texto UNIDAD MEDIDA
+    ("HORAS PROGRAMADOR  12  Hora  6991"), un solo tabulador como separador y las
+    NC con solo VALOR UNITARIO (cantidad = 0 → se toma de la factura referenciada:
+    "en NC por diferencia de precio, la diferencia se aplica a todas las unidades",
+    Instrucciones del Set de Pruebas). Devuelve None si la línea no calza."""
+    campos = _SEP_COLS.split(line.strip())
+    if len(campos) < 2 or len(campos) > len(columnas) + 1:
+        return None
+    nombre = campos[0].strip()
+    if len(nombre) < 2:
+        return None
+    # El separador junta tabs y espacios, así que una celda en blanco correría
+    # las demás columnas (ej. cantidad vacía → el valor quedaría como cantidad).
+    # Solo el descuento puede faltar (va al final); si falta otra columna, la
+    # línea es ambigua: mejor un error claro que un monto inventado.
+    # Solo es fila de ítem si trae algún número; "CLAVE: valor" u otro texto no.
+    valores = [c.strip() for c in campos[1:]]
+    if nombre.endswith(':') or not any(re.fullmatch(r'[\d.,]+%?', v) for v in valores):
+        return None
+    obligatorias = [c for c in columnas if c != "descuento"]
+    if len(campos) - 1 < len(obligatorias):
+        raise ValueError(f"La línea '{_SEP_COLS.sub(' | ', line.strip())}' no calza con las columnas "
+                         f"del set ({', '.join(columnas)}): falta un valor.")
+    vals = dict(zip(columnas, (c.strip() for c in campos[1:])))
+    try:
+        cantidad = _num_set(vals["cantidad"]) if vals.get("cantidad") else 0.0
+        precio = _num_set(vals["precio"]) if vals.get("precio") else 0.0
+        dscto = (float(vals["descuento"].rstrip('%').strip().replace(',', '.'))
+                 if vals.get("descuento") else None)
+    except ValueError:
+        return None   # columnas corridas (ej. falta la unidad): que decida el patrón
+    unidad = vals.get("unidad") or None
+    if unidad and re.fullmatch(r'[\d.,]+', unidad):
+        raise ValueError(f"La línea '{_SEP_COLS.sub(' | ', line.strip())}' no calza con las columnas "
+                         f"del set ({', '.join(columnas)}): la unidad de medida es un número.")
+    if cantidad == 0 and precio == 0:
+        return None
+    return ItemSet(nombre=nombre, cantidad=cantidad, precio_unitario=precio, descuento_pct=dscto,
+                   es_exento='EXENTO' in nombre.upper(), unidad=unidad)
 
 
 def _try_parse_item(line: str) -> Optional[ItemSet]:

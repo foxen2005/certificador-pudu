@@ -277,9 +277,12 @@ function SetupStep({
   const [caf33, setCaf33] = useState<File | null>(null);
   const [caf56, setCaf56] = useState<File | null>(null);
   const [caf61, setCaf61] = useState<File | null>(null);
+  // Factura Exenta (34): opcional, solo si la empresa también la certifica
+  const [exenta, setExenta] = useState(false);
+  const [caf34, setCaf34] = useState<File | null>(null);
   const [claveError, setClaveError] = useState(false);
 
-  const ready = !!pfx && !!datos && datosOk && !!(caf33 || caf56 || caf61);
+  const ready = !!pfx && !!datos && datosOk && !!(caf33 || caf56 || caf61) && (!exenta || !!caf34);
 
   async function handleGuardarYContinuar() {
     const clave = window.prompt("Ingresa la clave para continuar:");
@@ -300,7 +303,10 @@ function SetupStep({
       return;
     }
     setClaveError(false);
-    onDone({ pfx: pfx!, datos: datos!, clave, cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }) } });
+    onDone({
+      pfx: pfx!, datos: datos!, clave, exenta,
+      cafs: { ...(caf33 && { "33": caf33 }), ...(caf56 && { "56": caf56 }), ...(caf61 && { "61": caf61 }), ...(exenta && caf34 && { "34": caf34 }) },
+    });
   }
 
   return (
@@ -362,6 +368,18 @@ function SetupStep({
         </div>
       </div>
 
+      <div className="space-y-3 rounded-lg border p-4">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" className="h-4 w-4 rounded border-input" checked={exenta} onChange={e => setExenta(e.target.checked)} />
+          También certifico Factura Exenta (34)
+        </label>
+        {exenta && (
+          <div className="max-w-xs">
+            <UploadBox label="CAF Factura Exenta" hint="dte34d1a100.xml" icon="🧾" accept=".xml" optionalTag="T34" file={caf34} onChange={setCaf34} />
+          </div>
+        )}
+      </div>
+
       <Button size="lg" disabled={!ready} onClick={handleGuardarYContinuar}>
         Guardar y continuar →
       </Button>
@@ -379,6 +397,8 @@ interface SharedFiles {
   datos: File;
   cafs: Record<string, File>;
   clave: string;
+  /** Generar también el SET FACTURA EXENTA (34) junto al básico. */
+  exenta?: boolean;
 }
 
 function Etapa1Step({
@@ -410,6 +430,10 @@ function Etapa1Step({
       if (shared.cafs["33"]) fd.append("caf_33", shared.cafs["33"]);
       if (shared.cafs["56"]) fd.append("caf_56", shared.cafs["56"]);
       if (shared.cafs["61"]) fd.append("caf_61", shared.cafs["61"]);
+      if (shared.exenta && shared.cafs["34"]) {
+        fd.append("caf_34", shared.cafs["34"]);
+        fd.append("incluir_exenta", "true");
+      }
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
       if (nroCompras) fd.append("nro_atencion_compras", nroCompras);
@@ -521,6 +545,21 @@ function Etapa1Step({
 
       {result && (
         <div className="space-y-5">
+          {result.aviso_exenta && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{result.aviso_exenta}</AlertDescription>
+            </Alert>
+          )}
+          {!!result.casos_exenta_excluidos?.length && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Este archivo trae también el <strong>SET FACTURA EXENTA</strong> ({result.casos_exenta_excluidos.length} casos), que no se
+                generó. Si lo certificas, marca "También certifico Factura Exenta (34)" en Configuración.
+              </AlertDescription>
+            </Alert>
+          )}
           {!!result.casos_compra_excluidos?.length && (
             <Alert>
               <AlertCircle className="h-4 w-4" />
@@ -969,7 +1008,7 @@ function CertWizard() {
 
             <div className="mt-6 rounded-lg border p-3 text-xs">
               <p className="mb-1 font-semibold text-foreground">Certificaciones adicionales</p>
-              <p className="text-muted-foreground">Exportación (110/111/112), Guías (52), Factura de Compra (46), Exenta — sets aparte del básico.</p>
+              <p className="text-muted-foreground">Exportación (110/111/112), Guías (52) y Factura de Compra (46): sets aparte del básico.</p>
               <Link to="/adicionales" className="mt-2 inline-block font-semibold text-primary hover:underline">Abrir módulos →</Link>
             </div>
 

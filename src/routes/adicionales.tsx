@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState, type ChangeEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Download, Globe, Loader2, Lock, ShoppingCart, Truck, FileText } from "lucide-react";
+import { AlertCircle, AlertTriangle, ArrowLeft, CheckCircle2, Download, Globe, Loader2, ShoppingCart, Truck } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,9 @@ import { decodificarDatos, validarDatosTxt } from "@/lib/datos-txt";
 
 // Certificaciones adicionales — módulo INDEPENDIENTE del wizard del set básico.
 // Cada tipo de documento que el SII certifica con su propio set vive aquí:
-// Exportación (110/111/112), Guía de Despacho (52), Factura de Compra (46,
-// sacada del wizard principal) y Factura Exenta (34) cuando tengamos su set.
+// Exportación (110/111/112), Guía de Despacho (52) y Factura de Compra (46,
+// sacada del wizard principal). La Factura Exenta (34) va en el wizard, como
+// opción del set básico.
 
 export const Route = createFileRoute("/adicionales")({
   validateSearch: (search: Record<string, unknown>): { mod?: string } =>
@@ -1321,37 +1322,12 @@ function FacturaCompra({ shared }: { shared: Shared }) {
   );
 }
 
-// ─── Módulos pendientes de set ───────────────────────────────────────────────
-
-function Pendiente({ titulo, icon, detalle }: { titulo: string; icon: ReactNode; detalle: string }) {
-  return (
-    <div className="space-y-4">
-      <h2 className="flex items-center gap-2 text-lg font-semibold">{icon} {titulo}</h2>
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>{detalle}</AlertDescription>
-      </Alert>
-      <PortalGuide
-        title="Cómo obtener el set de pruebas"
-        url="https://maullin.sii.cl/cvc/dte/menu_postulantes.html"
-        steps={[
-          { text: "Menú Postulantes → Postulación: marcar el tipo de documento", highlight: true },
-          { text: "Solicitar el CAF correspondiente en el ambiente de certificación" },
-          { text: "Set de Pruebas → descargar el .txt (cada descarga genera un N° de atención nuevo)" },
-          { text: "Entregar el .txt a PUDU para habilitar este módulo" },
-        ]}
-      />
-    </div>
-  );
-}
-
 // ─── Página ──────────────────────────────────────────────────────────────────
 
 const MODULOS = [
-  { key: "exportacion", label: "Exportación (110/111/112)", Icon: Globe, estado: "disponible" },
-  { key: "guia", label: "Guía de Despacho (52)", Icon: Truck, estado: "disponible" },
-  { key: "compra", label: "Factura de Compra (46)", Icon: ShoppingCart, estado: "disponible" },
-  { key: "exenta", label: "Factura Exenta (34)", Icon: FileText, estado: "requiere set" },
+  { key: "exportacion", label: "Exportación (110/111/112)", Icon: Globe },
+  { key: "guia", label: "Guía de Despacho (52)", Icon: Truck },
+  { key: "compra", label: "Factura de Compra (46)", Icon: ShoppingCart },
 ] as const;
 type ModKey = (typeof MODULOS)[number]["key"];
 
@@ -1392,7 +1368,6 @@ function Adicionales() {
                 >
                   <m.Icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1">{m.label}</span>
-                  {m.estado === "requiere set" && <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-label="Requiere set de pruebas del SII" />}
                 </button>
               ))}
             </nav>
@@ -1404,13 +1379,6 @@ function Adicionales() {
           {shared && mod === "exportacion" && <Exportacion shared={shared} />}
           {shared && mod === "guia" && <Guias shared={shared} />}
           {shared && mod === "compra" && <FacturaCompra shared={shared} />}
-          {shared && mod === "exenta" && (
-            <Pendiente
-              icon={<FileText className="h-5 w-5 text-primary" />}
-              titulo="Factura No Afecta o Exenta (34)"
-              detalle="El SII entrega un SET FACTURA EXENTA junto al básico cuando se postula al tipo 34. El generador ya soporta el documento; falta el parser de ese set."
-            />
-          )}
         </main>
       </div>
     </div>

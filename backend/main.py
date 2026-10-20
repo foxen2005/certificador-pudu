@@ -166,11 +166,14 @@ async def certificar(
     caf_61: UploadFile = File(None, description="CAF Nota de Crédito (T61)"),
     caf_52: UploadFile = File(None, description="CAF Guía de Despacho (T52)"),
     caf_46: UploadFile = File(None, description="CAF Factura de Compra (T46)"),
+    caf_34: UploadFile = File(None, description="CAF Factura Exenta (T34), solo con incluir_exenta"),
     folio_inicial_33: int = Form(None, description="Folio inicial T33 (opcional)"),
     folio_inicial_56: int = Form(None, description="Folio inicial T56 (opcional)"),
     folio_inicial_61: int = Form(None, description="Folio inicial T61 (opcional)"),
     folio_inicial_52: int = Form(None, description="Folio inicial T52 (opcional)"),
     folio_inicial_46: int = Form(None, description="Folio inicial T46 (opcional)"),
+    folio_inicial_34: int = Form(None, description="Folio inicial T34 (opcional)"),
+    incluir_exenta: bool = Form(False, description="Generar también el SET FACTURA EXENTA del archivo"),
 ):
     """
     Flujo completo: recibe SIISetDePruebas + CAFs + certificado PFX,
@@ -181,12 +184,20 @@ async def certificar(
     Certificaciones adicionales (POST /adicionales/compra/set). `caf_46` y
     `folio_inicial_46` se siguen aceptando por compatibilidad con el frontend
     anterior, pero ya no se usan aquí.
+
+    El SET FACTURA EXENTA (T34 y sus NC/ND) es OPCIONAL: solo con
+    `incluir_exenta=true` (+ `caf_34`) se genera en el mismo EnvioDTE, en el
+    orden del archivo. Sin la casilla, esos casos se dejan fuera con aviso.
     """
+    cafs_basico = {33: caf_33, 56: caf_56, 61: caf_61, 52: caf_52}
+    folios_basico = {33: folio_inicial_33, 56: folio_inicial_56, 61: folio_inicial_61, 52: folio_inicial_52}
+    if incluir_exenta:
+        cafs_basico[34] = caf_34
+        folios_basico[34] = folio_inicial_34
     return await _certificar_core(
-        set_pruebas, datos, pfx,
-        {33: caf_33, 56: caf_56, 61: caf_61, 52: caf_52},
-        {33: folio_inicial_33, 56: folio_inicial_56, 61: folio_inicial_61, 52: folio_inicial_52},
+        set_pruebas, datos, pfx, cafs_basico, folios_basico,
         solo="basico",
+        incluir_exenta=incluir_exenta,
         # Un frontend anterior aún manda caf_46 creyendo que el T46 va en este
         # envío: si el archivo trae ese set, avisar en vez de omitirlo en silencio.
         frontend_con_t46=caf_46 is not None,
@@ -197,6 +208,20 @@ def _es_seccion_compra(caso: CasoSet) -> bool:
     return bool(caso.seccion) and "FACTURA DE COMPRA" in caso.seccion
 
 
+def _desciende_de(caso: CasoSet, caso_by_num: dict, es_origen, _visto: set | None = None) -> bool:
+    """True si `es_origen(caso)` o si el caso referencia (transitivamente, por
+    REFERENCIA ... CASO n-n) a uno que lo cumple. Usado para la retención de la
+    Factura de Compra (T46) y la exención de la Factura Exenta (T34)."""
+    if es_origen(caso):
+        return True
+    _visto = _visto or set()
+    if not caso.referencia_caso or caso.referencia_caso in _visto:
+        return False
+    _visto.add(caso.referencia_caso)
+    ref = caso_by_num.get(caso.referencia_caso)
+    return _desciende_de(ref, caso_by_num, es_origen, _visto) if ref else False
+
+
 def _marcar_retencion(casos: list[CasoSet]) -> None:
     """Retención total del IVA (cambio de sujeto): la lleva la Factura de Compra
     (T46), todo caso del encabezado "SET FACTURA DE COMPRA" y, por herencia, toda
@@ -204,23 +229,27 @@ def _marcar_retencion(casos: list[CasoSet]) -> None:
     del set de Factura de Compra: la sección manda; la cadena de referencias es
     el respaldo para archivos sin encabezados."""
     caso_by_num = {c.numero: c for c in casos}
-
-    def _tiene_retencion(caso: CasoSet, _visto: set | None = None) -> bool:
-        if caso.tipo_doc == 46 or _es_seccion_compra(caso):
-            return True
-        _visto = _visto or set()
-        if not caso.referencia_caso or caso.referencia_caso in _visto:
-            return False
-        _visto.add(caso.referencia_caso)
-        ref = caso_by_num.get(caso.referencia_caso)
-        return _tiene_retencion(ref, _visto) if ref else False
-
+    es_compra = lambda c: c.tipo_doc == 46 or _es_seccion_compra(c)
     for caso in casos:
-        caso.con_retencion = _tiene_retencion(caso)
+        caso.con_retencion = _desciende_de(caso, caso_by_num, es_compra)
+
+
+def _desciende_de_t34(caso: CasoSet, caso_by_num: dict) -> bool:
+    """T34 o NC/ND que referencia (transitivamente) una Factura Exenta."""
+    return _desciende_de(caso, caso_by_num, lambda c: c.tipo_doc == 34)
+
+
+def _es_caso_exenta(caso: CasoSet, caso_by_num: dict) -> bool:
+    """¿El caso es del SET FACTURA EXENTA? La sección manda; sin encabezados,
+    la cadena de referencias a una T34 (el set básico no trae T34)."""
+    if caso.seccion:
+        return "EXENTA" in caso.seccion and "BASICO" not in caso.seccion
+    return _desciende_de_t34(caso, caso_by_num)
 
 
 async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_overrides: dict,
-                           solo: str = "basico", frontend_con_t46: bool = False):
+                           solo: str = "basico", frontend_con_t46: bool = False,
+                           incluir_exenta: bool = False):
     """Genera el EnvioDTE de un set a partir del SIISetDePruebas.
 
     solo="basico": set básico (T33/T56/T61/T52…) + Libro de Ventas/Compras,
@@ -281,11 +310,28 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
             raise HTTPException(422, "La Factura de Compra (T46) ahora se certifica aparte: recarga la página "
                                      "y genera ese set en Certificaciones adicionales → Factura de Compra. "
                                      "El set básico se genera sin el CAF T46.")
-        sp.casos = casos_basico
+        _por_num = {c.numero: c for c in casos_basico}
+        casos_exenta, casos_normales = [], []
+        for c in casos_basico:
+            (casos_exenta if _es_caso_exenta(c, _por_num) else casos_normales).append(c)
+        # Casilla marcada pero el archivo no trae el set: se genera el básico igual
+        # (la casilla queda guardada en Configuración) y se avisa.
+        aviso_exenta = None
+        if incluir_exenta and not casos_exenta:
+            aviso_exenta = ("Marcaste Factura Exenta, pero este archivo no trae el SET FACTURA EXENTA: se generó "
+                            "solo el set básico. Para que el SII lo entregue hay que marcar el tipo 34 en la "
+                            "postulación (maullin) y volver a bajar el set.")
+        # Con la casilla: básico + exenta en el orden del archivo (Instrucciones del
+        # Set de Pruebas: el envío a revisión lleva todos los documentos de los sets
+        # "en el mismo orden en que le fueron entregados"). Sin ella, solo el básico.
+        sp.casos = casos_basico if incluir_exenta else casos_normales
         if not sp.casos:
             raise HTTPException(422, "El archivo solo trae el set de Factura de Compra: genéralo en "
                                      "Certificaciones adicionales → Factura de Compra."
                                 if casos_compra else
+                                "El archivo solo trae el SET FACTURA EXENTA: marca \"También certifico "
+                                "Factura Exenta (34)\" en Configuración y sube el CAF T34."
+                                if casos_exenta else
                                 "El archivo no trae casos de prueba (CASO n-n con DOCUMENTO). "
                                 "¿Es el SIISetDePruebas*.txt correcto?")
 
@@ -317,13 +363,21 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
             # desde el caso referenciado. Sin esto, una NC que devuelve items de
             # una factura con descuento por línea (5%, 7%, ...) no aplica ese
             # descuento → "Los Valores de la Línea N No Cuadran" en el SII.
-            ref_by_nombre = {it.nombre.upper(): it for it in ref.items}
+            _clave = lambda n: " ".join(n.upper().split())   # ignora espacios repetidos
+            ref_by_nombre = {_clave(it.nombre): it for it in ref.items}
             for item in caso.items:
-                ref_it = ref_by_nombre.get(item.nombre.upper())
+                ref_it = ref_by_nombre.get(_clave(item.nombre))
                 if not ref_it:
                     continue
                 if item.precio_unitario == 0:
                     item.precio_unitario = ref_it.precio_unitario
+                # NC/ND "MODIFICA MONTO" con solo VALOR UNITARIO: "la diferencia
+                # se debe aplicar a todas las unidades del ítem" (Instrucciones del
+                # Set de Pruebas) → cantidad de la factura original.
+                if item.cantidad == 0:
+                    item.cantidad = ref_it.cantidad
+                if not item.unidad and ref_it.unidad:
+                    item.unidad = ref_it.unidad
                 if not item.descuento_pct and ref_it.descuento_pct:
                     item.descuento_pct = ref_it.descuento_pct
                 if not item.es_exento and ref_it.es_exento:
@@ -336,6 +390,22 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
             from set_parser import ItemSet as _ItemSet
             razon = caso.razon_referencia or "REFERENCIA"
             caso.items = [_ItemSet(nombre=razon[:80], cantidad=1, precio_unitario=0)]
+
+    # Una NC/ND "MODIFICA MONTO" toma la cantidad de la factura por el nombre
+    # del ítem: si no lo encontró, la línea saldría en 0 sin aviso.
+    for caso in sp.casos:
+        for item in caso.items:
+            if item.cantidad == 0 and item.precio_unitario > 0:
+                raise HTTPException(422, f"Caso {caso.numero}: el ítem '{item.nombre}' no indica cantidad y no se "
+                                         f"encontró con ese nombre en el documento referenciado ({caso.referencia_caso}).")
+
+    # Factura Exenta y sus NC/ND: todos los ítems exentos. Se marca aquí y no
+    # solo en build_dte_xml (que lo hace sobre una copia) porque el Libro de
+    # Ventas lee estos mismos casos: sin esto la T34 entraba al libro con IVA.
+    for caso in sp.casos:
+        if _desciende_de_t34(caso, caso_by_num):
+            for item in caso.items:
+                item.es_exento = True
 
     # Generar DTEs firmados
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -441,8 +511,13 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
         # Libro de Ventas
         if solo == "basico" and sp.nro_atencion_ventas:
             try:
+                # "Construya el libro de ventas con los documentos con que generó
+                # el set básico o el set de factura exenta, según corresponda. Si
+                # obtuvo ambos set, utilice los documentos del set básico." (texto
+                # del SET LIBRO DE VENTAS del SII)
+                casos_libro = casos_normales or sp.casos
                 lv_xml = build_libro_ventas(
-                    sp.casos, folios_ref, RECEPTOR_PRUEBA, emisor_data,
+                    casos_libro, folios_ref, RECEPTOR_PRUEBA, emisor_data,
                     pfx_bytes, pfx_password, timestamp, sp.nro_atencion_ventas,
                 )
                 zf.writestr(f"LibroVentas_{rut_clean}.xml", lv_xml)
@@ -484,6 +559,10 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
         # Casos de Factura de Compra que venían en el archivo y NO se generaron
         # aquí: van en Certificaciones adicionales → Factura de Compra.
         "casos_compra_excluidos": [c.numero for c in casos_compra],
+        # Casos del SET FACTURA EXENTA que se dejaron fuera (casilla sin marcar)
+        "casos_exenta_excluidos": [] if incluir_exenta else [c.numero for c in casos_exenta],
+        "nro_atencion_exenta": sp.nro_atencion_exenta if incluir_exenta else None,
+        "aviso_exenta": aviso_exenta,
         "nro_atencion": sp.nro_atencion_basico,
         "nro_atencion_ventas": sp.nro_atencion_ventas,
         "nro_atencion_compras": sp.nro_atencion_compras,

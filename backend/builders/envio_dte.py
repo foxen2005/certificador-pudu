@@ -169,6 +169,10 @@ def _cod_ref(razon: str) -> str:
         return "1"
     if "CORRIGE" in r or "GIRO" in r or "RUBRO" in r:
         return "2"
+    # "MODIFICA MONTO" (SET FACTURA EXENTA) = corrige montos. Formato DTE:
+    # 1 anula, 2 corrige texto, 3 corrige montos (LibreDTE: 'MODIFICA' → 3).
+    if "MODIFICA" in r and "MONTO" in r:
+        return "3"
     if "DEVOLUCION" in r or "DEVOLUCIÓN" in r:
         return "3"
     return "1"
@@ -297,6 +301,9 @@ def build_dte_xml(caso: CasoSet, folio: int, emisor_data: dict,
         etree.SubElement(DET, "NmbItem").text = item.nombre
         if item.precio_unitario > 0:
             etree.SubElement(DET, "QtyItem").text = str(int(item.cantidad))
+            # Columna "UNIDAD MEDIDA" del set (orden XSD: QtyItem → UnmdItem → PrcItem)
+            if getattr(item, "unidad", None):
+                etree.SubElement(DET, "UnmdItem").text = item.unidad[:4]
             etree.SubElement(DET, "PrcItem").text = str(int(item.precio_unitario))
             if item.descuento_pct:
                 etree.SubElement(DET, "DescuentoPct").text = str(item.descuento_pct)
