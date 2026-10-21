@@ -35,6 +35,8 @@ export interface BatchResult {
   nro_atencion_exenta?: string | null;
   /** Casilla de Factura Exenta marcada pero el archivo no trae ese set. */
   aviso_exenta?: string | null;
+  /** Un EnvioDTE por set (básico y, si se marcó, el de Factura Exenta). */
+  envios?: { archivo: string; set: "basico" | "exenta"; documentos: number }[];
   documentos: number;
   pdfs_generados: number;
   aprobados: number;

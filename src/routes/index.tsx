@@ -413,6 +413,8 @@ function Etapa1Step({
   const [nroVentas, setNroVentas] = useState("");
   const [nroCompras, setNroCompras] = useState("");
   const [foliosIni, setFoliosIni] = useState<Record<string, string>>({});
+  // Folios de las NC/ND del set exenta (mismos CAF T61/T56 del básico)
+  const [foliosExenta, setFoliosExenta] = useState<Record<"61" | "56", string>>({ "61": "", "56": "" });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
@@ -433,6 +435,9 @@ function Etapa1Step({
       if (shared.exenta && shared.cafs["34"]) {
         fd.append("caf_34", shared.cafs["34"]);
         fd.append("incluir_exenta", "true");
+        for (const t of ["61", "56"] as const) {
+          if (foliosExenta[t].trim()) fd.append(`folio_exenta_${t}`, foliosExenta[t].trim());
+        }
       }
       if (nroBasico)  fd.append("nro_atencion_basico", nroBasico);
       if (nroVentas)  fd.append("nro_atencion_ventas", nroVentas);
@@ -532,6 +537,27 @@ function Etapa1Step({
         </div>
       )}
 
+      {shared.exenta && (
+        <div>
+          <p className="mb-2 text-sm font-medium">Folio inicial NC/ND del Set Factura Exenta (opcional)</p>
+          <div className="grid gap-3 sm:grid-cols-4">
+            {(["61", "56"] as const).map(t => (
+              <div className="space-y-1" key={t}>
+                <Label htmlFor={`folio-exenta-${t}`}>T{t} Exenta</Label>
+                <Input
+                  id={`folio-exenta-${t}`}
+                  type="number"
+                  min="1"
+                  placeholder="después del básico"
+                  value={foliosExenta[t]}
+                  onChange={e => setFoliosExenta(prev => ({ ...prev, [t]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Button size="lg" disabled={!ready || loading} onClick={generate}>
         {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando XMLs y PDFs…</> : "Generar Set de Pruebas"}
       </Button>
@@ -593,7 +619,12 @@ function Etapa1Step({
             steps={[
               { text: "Entra a maullin.sii.cl con tu RUT y clave del SII" },
               { text: "Ve a: Boletas y Documentos → Certificación DTE → Envío de Documentos" },
-              { text: "Sube EnvioDTE_{RUT}.xml — anota el Identificador de Envío", highlight: true },
+              ...(result.envios?.length ? result.envios : [{ archivo: "EnvioDTE_{RUT}.xml", set: "basico" as const, documentos: 0 }]).map(e => ({
+                text: e.set === "exenta"
+                  ? `Sube ${e.archivo} en su propio envío: ese N° va en la casilla SET FACTURA EXENTA`
+                  : `Sube ${e.archivo} (si el SET BASICO no está ya revisado conforme) — anota el Identificador de Envío`,
+                highlight: true,
+              })),
               { text: "Sube LibroVentas_{RUT}.xml de la misma forma" },
               { text: "Sube LibroCompras_{RUT}.xml (puede ser en periodo diferente, ej. 2000-02)" },
               { text: "Espera el email del SII o consulta el estado en el portal — busca EPR + AOK (sin reparos)", highlight: true },
@@ -853,6 +884,7 @@ function Etapa3Step({ shared, onDone }: { shared: SharedFiles; onDone: () => voi
 function Etapa4Step({ shared }: { shared: SharedFiles }) {
   const [xml1, setXml1] = useState<File | null>(null);
   const [xml2, setXml2] = useState<File | null>(null);
+  const [xmlExenta, setXmlExenta] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState("");
@@ -864,6 +896,7 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
       const fd = new FormData();
       if (xml1) fd.append("envio_basico", xml1);
       if (xml2) fd.append("envio_simulacion", xml2);
+      if (xmlExenta) fd.append("envio_exenta", xmlExenta);
       const data = await postForm("/api/sii/etapa4", fd, shared.clave) as BatchResult;
       setResult(data);
     } catch (e) {
@@ -914,9 +947,19 @@ function Etapa4Step({ shared }: { shared: SharedFiles }) {
           file={xml2}
           onChange={setXml2}
         />
+        {shared.exenta && (
+          <UploadBox
+            label="EnvioDTE Set Factura Exenta (Etapa 1)"
+            hint="EnvioDTE_EXENTA_{RUT}.xml generado en Etapa 1"
+            icon="📄"
+            accept=".xml"
+            file={xmlExenta}
+            onChange={setXmlExenta}
+          />
+        )}
       </div>
 
-      <Button size="lg" disabled={(!xml1 && !xml2) || loading} onClick={generate}>
+      <Button size="lg" disabled={(!xml1 && !xml2 && !xmlExenta) || loading} onClick={generate}>
         {loading
           ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generando PDFs…</>
           : "Generar PDFs de muestra"}

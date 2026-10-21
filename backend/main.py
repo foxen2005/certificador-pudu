@@ -174,6 +174,8 @@ async def certificar(
     folio_inicial_46: int = Form(None, description="Folio inicial T46 (opcional)"),
     folio_inicial_34: int = Form(None, description="Folio inicial T34 (opcional)"),
     incluir_exenta: bool = Form(False, description="Generar también el SET FACTURA EXENTA del archivo"),
+    folio_exenta_61: int = Form(None, description="Folio inicial de las NC (T61) del set exenta (opcional)"),
+    folio_exenta_56: int = Form(None, description="Folio inicial de las ND (T56) del set exenta (opcional)"),
 ):
     """
     Flujo completo: recibe SIISetDePruebas + CAFs + certificado PFX,
@@ -186,8 +188,12 @@ async def certificar(
     anterior, pero ya no se usan aquí.
 
     El SET FACTURA EXENTA (T34 y sus NC/ND) es OPCIONAL: solo con
-    `incluir_exenta=true` (+ `caf_34`) se genera en el mismo EnvioDTE, en el
-    orden del archivo. Sin la casilla, esos casos se dejan fuera con aviso.
+    `incluir_exenta=true` (+ `caf_34`) se genera, en su PROPIO EnvioDTE
+    (EnvioDTE_EXENTA_{RUT}.xml): en maullin cada set se declara con su N° de
+    Envío. Sus NC/ND usan los mismos CAF T61/T56 que el básico; sus folios van
+    después de los del básico o desde `folio_exenta_61/56`, sin mover nunca los
+    del básico (el Libro de Ventas debe calzar con el básico ya enviado).
+    Sin la casilla, esos casos se dejan fuera con aviso.
     """
     cafs_basico = {33: caf_33, 56: caf_56, 61: caf_61, 52: caf_52}
     folios_basico = {33: folio_inicial_33, 56: folio_inicial_56, 61: folio_inicial_61, 52: folio_inicial_52}
@@ -198,6 +204,7 @@ async def certificar(
         set_pruebas, datos, pfx, cafs_basico, folios_basico,
         solo="basico",
         incluir_exenta=incluir_exenta,
+        folios_exenta={61: folio_exenta_61, 56: folio_exenta_56},
         # Un frontend anterior aún manda caf_46 creyendo que el T46 va en este
         # envío: si el archivo trae ese set, avisar en vez de omitirlo en silencio.
         frontend_con_t46=caf_46 is not None,
@@ -249,7 +256,7 @@ def _es_caso_exenta(caso: CasoSet, caso_by_num: dict) -> bool:
 
 async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_overrides: dict,
                            solo: str = "basico", frontend_con_t46: bool = False,
-                           incluir_exenta: bool = False):
+                           incluir_exenta: bool = False, folios_exenta: dict | None = None):
     """Genera el EnvioDTE de un set a partir del SIISetDePruebas.
 
     solo="basico": set básico (T33/T56/T61/T52…) + Libro de Ventas/Compras,
@@ -300,6 +307,9 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
     _marcar_retencion(sp.casos)
     casos_compra = [c for c in sp.casos if c.con_retencion]
     casos_basico = [c for c in sp.casos if not c.con_retencion]
+    casos_exenta: list[CasoSet] = []
+    casos_normales: list[CasoSet] = []
+    aviso_exenta = None
     if solo == "compra":
         sp.casos = casos_compra
         if not sp.casos:
@@ -311,19 +321,16 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
                                      "y genera ese set en Certificaciones adicionales → Factura de Compra. "
                                      "El set básico se genera sin el CAF T46.")
         _por_num = {c.numero: c for c in casos_basico}
-        casos_exenta, casos_normales = [], []
         for c in casos_basico:
             (casos_exenta if _es_caso_exenta(c, _por_num) else casos_normales).append(c)
         # Casilla marcada pero el archivo no trae el set: se genera el básico igual
         # (la casilla queda guardada en Configuración) y se avisa.
-        aviso_exenta = None
         if incluir_exenta and not casos_exenta:
             aviso_exenta = ("Marcaste Factura Exenta, pero este archivo no trae el SET FACTURA EXENTA: se generó "
                             "solo el set básico. Para que el SII lo entregue hay que marcar el tipo 34 en la "
                             "postulación (maullin) y volver a bajar el set.")
-        # Con la casilla: básico + exenta en el orden del archivo (Instrucciones del
-        # Set de Pruebas: el envío a revisión lleva todos los documentos de los sets
-        # "en el mismo orden en que le fueron entregados"). Sin ella, solo el básico.
+        # Con la casilla: básico + exenta (cada uno irá en su EnvioDTE); sin ella,
+        # solo el básico.
         sp.casos = casos_basico if incluir_exenta else casos_normales
         if not sp.casos:
             raise HTTPException(422, "El archivo solo trae el set de Factura de Compra: genéralo en "
@@ -436,40 +443,74 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
     tipos_ref: dict[str, int] = {c.numero: c.tipo_doc for c in sp.casos}
     dtes_xml = []
 
+    # Set básico primero y después el exenta: así los folios del básico nunca
+    # dependen de la casilla (el básico y su Libro de Ventas salen iguales con o
+    # sin ella, aunque el archivo traiga la exenta antes o intercalada).
+    ids_exenta = {c.numero for c in casos_exenta} if (solo == "basico" and incluir_exenta) else set()
+    casos_envio_basico = [c for c in sp.casos if c.numero not in ids_exenta]
+    casos_envio_exenta = [c for c in sp.casos if c.numero in ids_exenta]
+    dte_por_caso: dict[str, object] = {}
     try:
-        for caso in sp.casos:
-            caf = cafs[caso.tipo_doc]
-            folio = caf.next_folio(folios_usados[caso.tipo_doc])
-            folios_usados[caso.tipo_doc].add(folio)
-            folios_ref[caso.numero] = folio
-            dte = build_dte_xml(caso, folio, emisor_data, RECEPTOR_PRUEBA,
-                                caf, timestamp, folios_ref, tipos_ref)
-            dtes_xml.append(dte)
+        for grupo in (casos_envio_basico, casos_envio_exenta):
+            if grupo is casos_envio_exenta:
+                # NC/ND del set exenta: folio inicial propio (opcional) en los
+                # mismos CAF T61/T56 del básico, sin tocar los folios del básico.
+                for _t, _v in (folios_exenta or {}).items():
+                    if _v is None or _t not in cafs:
+                        continue
+                    if not (cafs[_t].desde <= _v <= cafs[_t].hasta):
+                        raise HTTPException(422, f"Folio inicial {_v} para T{_t} del set exenta fuera del rango "
+                                                 f"del CAF ({cafs[_t].desde}-{cafs[_t].hasta}).")
+                    folios_usados[_t] |= set(range(cafs[_t].desde, _v))
+            for caso in grupo:
+                caf = cafs[caso.tipo_doc]
+                folio = caf.next_folio(folios_usados[caso.tipo_doc])
+                folios_usados[caso.tipo_doc].add(folio)
+                folios_ref[caso.numero] = folio
+                dte_por_caso[caso.numero] = build_dte_xml(caso, folio, emisor_data, RECEPTOR_PRUEBA,
+                                                          caf, timestamp, folios_ref, tipos_ref)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Error generando DTEs: {e}")
+    dtes_xml = [dte_por_caso[c.numero] for c in casos_envio_basico + casos_envio_exenta]
 
-    # Construir EnvioDTE firmado
+    rut_clean = emisor_data["rut"].replace("-", "")
+    envio_name = f"EnvioDTE_COMPRA_{rut_clean}.xml" if solo == "compra" else f"EnvioDTE_{rut_clean}.xml"
+    envio_exenta_name = f"EnvioDTE_EXENTA_{rut_clean}.xml"
+
+    # Un EnvioDTE por set: en maullin cada set se declara con su propio N° de
+    # Envío (el SET FACTURA EXENTA tiene su casilla aparte del SET BASICO, que
+    # puede estar ya "REVISADO CONFORME"). Los folios son correlativos entre
+    # ambos porque se asignaron arriba en una sola pasada.
+    grupos = [
+        (envio_name, "basico", [dte_por_caso[c.numero] for c in casos_envio_basico]),
+        (envio_exenta_name, "exenta", [dte_por_caso[c.numero] for c in casos_envio_exenta]),
+    ]
+    envios: list[tuple[str, bytes]] = []
+    envios_info: list[dict] = []
     try:
-        envio_xml = build_envio_dte(dtes_xml, emisor_data, pfx_bytes, pfx_password, timestamp)
+        for nombre, tipo_set, dtes in grupos:
+            if dtes:
+                envios.append((nombre, build_envio_dte(dtes, emisor_data, pfx_bytes, pfx_password, timestamp)))
+                envios_info.append({"archivo": nombre, "set": tipo_set, "documentos": len(dtes)})
     except Exception as e:
         raise HTTPException(500, f"Error firmando EnvioDTE: {e}")
 
-    # Parsear el XML generado y producir PDFs
+    # Parsear los XML generados y producir PDFs
     try:
-        dtes_parsed = parse_envio_dte(envio_xml)
+        dtes_parsed = [dte for _, xml in envios for dte in parse_envio_dte(xml)]
     except Exception as e:
         raise HTTPException(500, f"Error releyendo XML generado: {e}")
 
     resultados = []
     zip_buf = io.BytesIO()
 
-    rut_clean = emisor_data["rut"].replace("-", "")
     libro_ventas_ok = False
     libro_compras_ok = False
 
     out_dir = (get_timestamped_output_dir(OUTPUT_BASE_DIR, prefix="compra_set") if solo == "compra"
                else get_timestamped_output_dir(OUTPUT_BASE_DIR))
-    envio_name = f"EnvioDTE_COMPRA_{rut_clean}.xml" if solo == "compra" else f"EnvioDTE_{rut_clean}.xml"
 
     def _save(filename: str, data) -> None:
         path = os.path.join(out_dir, filename)
@@ -479,9 +520,10 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
             fh.write(data)
 
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # EnvioDTE XML
-        zf.writestr(envio_name, envio_xml)
-        _save(envio_name, envio_xml)
+        # EnvioDTE XML (uno por set)
+        for nombre, xml in envios:
+            zf.writestr(nombre, xml)
+            _save(nombre, xml)
 
         # PDFs por cada DTE
         for dte in dtes_parsed:
@@ -515,7 +557,7 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
                 # el set básico o el set de factura exenta, según corresponda. Si
                 # obtuvo ambos set, utilice los documentos del set básico." (texto
                 # del SET LIBRO DE VENTAS del SII)
-                casos_libro = casos_normales or sp.casos
+                casos_libro = casos_envio_basico or casos_envio_exenta
                 lv_xml = build_libro_ventas(
                     casos_libro, folios_ref, RECEPTOR_PRUEBA, emisor_data,
                     pfx_bytes, pfx_password, timestamp, sp.nro_atencion_ventas,
@@ -547,7 +589,7 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
         return JSONResponse({
             "nro_atencion": sp.nro_atencion_factura_compra,
             "casos": [{"numero": c.numero, "tipo": c.tipo_doc, "folio": folios_ref.get(c.numero)} for c in sp.casos],
-            "archivo": envio_name,
+            "archivo": envios[0][0],
             "documentos": len(dtes_xml),
             "pdfs_generados": len(resultados),
             "aprobados": aprobados,
@@ -563,6 +605,9 @@ async def _certificar_core(set_pruebas, datos, pfx, caf_uploads: dict, folio_ove
         "casos_exenta_excluidos": [] if incluir_exenta else [c.numero for c in casos_exenta],
         "nro_atencion_exenta": sp.nro_atencion_exenta if incluir_exenta else None,
         "aviso_exenta": aviso_exenta,
+        # Archivos de envío generados: el del set básico y, si corresponde, el
+        # del SET FACTURA EXENTA (se sube y declara por separado en maullin).
+        "envios": envios_info,
         "nro_atencion": sp.nro_atencion_basico,
         "nro_atencion_ventas": sp.nro_atencion_ventas,
         "nro_atencion_compras": sp.nro_atencion_compras,
@@ -1102,13 +1147,14 @@ async def etapa3_intercambio(
 async def etapa4_muestras(
     envio_basico:      UploadFile = File(None, description="EnvioDTE Etapa 1 (Set Básico)"),
     envio_simulacion:  UploadFile = File(None, description="EnvioDTE Etapa 2 (Simulación)"),
+    envio_exenta:      UploadFile = File(None, description="EnvioDTE_EXENTA Etapa 1 (Set Factura Exenta)"),
 ):
     """
     Etapa 4 — Genera los PDFs de muestras impresas desde los EnvioDTE de Etapas 1 y 2.
     Sube los XML firmados y devuelve un ZIP con todos los PDFs listos para el portal SII.
     """
     sources = []
-    for upload in [envio_basico, envio_simulacion]:
+    for upload in [envio_basico, envio_exenta, envio_simulacion]:
         if upload is not None:
             raw = await upload.read()
             if raw:
